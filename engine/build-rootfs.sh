@@ -137,6 +137,39 @@ if [ "$WITH_AGY" = 1 ]; then
   endstep
 fi
 
+step "Fake /proc entries (Android hides these from apps; the app binds them only when unreadable)"
+fp="$ROOTFS/opt/hermes-local/proc"
+install -d -m 0755 "$fp"
+printf '0.12 0.07 0.02 2/165 765\n' >"$fp/loadavg"
+printf '284684.56 513853.46\n' >"$fp/uptime"
+printf 'Linux version 6.1.0-hermes-local (proot@localhost) (gcc) #1 SMP PREEMPT\n' >"$fp/version"
+printf '40\n' >"$fp/cap_last_cap"
+printf '524288\n' >"$fp/max_user_watches"
+cat >"$fp/stat" <<'EOT'
+cpu  1957 0 2877 93280 262 342 254 87 0 0
+cpu0 31 0 226 12027 82 10 4 9 0 0
+intr 63361 0 9 0 0 0 0 3 0 0 0 0 0 0 0 0 0
+ctxt 38014093
+btime 1694292441
+processes 26442
+procs_running 1
+procs_blocked 0
+softirq 75663 0 5903 6 25375 10774 0 243 11685 0 21677
+EOT
+cat >"$fp/vmstat" <<'EOT'
+nr_free_pages 1743136
+nr_zone_inactive_anon 179281
+nr_zone_active_anon 7183
+nr_zone_inactive_file 22858
+nr_zone_active_file 51328
+pgpgin 198
+pgpgout 0
+pswpin 0
+pswpout 0
+EOT
+chmod 0644 "$fp"/*
+endstep
+
 step "Identity, DNS, version"
 printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\noptions single-request-reopen\n' >"$ROOTFS/etc/resolv.conf"
 printf '127.0.0.1 localhost hermes-local\n::1 localhost ip6-localhost ip6-loopback\n' >"$ROOTFS/etc/hosts"
@@ -166,7 +199,7 @@ rm -f "$ROOTFS/usr/sbin/policy-rc.d"
 rm -rf "$ROOTFS"/var/lib/apt/lists/* "$ROOTFS"/var/cache/apt/* "$ROOTFS"/var/log/* "$ROOTFS"/tmp/* "$ROOTFS"/var/tmp/* \
   "$ROOTFS"/root/.cache "$ROOTFS"/root/.npm "$ROOTFS"/root/.bash_history "$ROOTFS"/usr/share/{man,info,groff,lintian}
 find "$ROOTFS/usr/share/locale" -mindepth 1 -maxdepth 1 ! -name locale.alias -exec rm -rf {} + 2>/dev/null || true
-rm -rf "$ROOTFS/root/.hermes/logs"/* "$ROOTFS/root/.hermes/sessions"/* 2>/dev/null || true
+rm -rf "$ROOTFS/root/.hermes/logs"/* "$ROOTFS/root/.hermes/sessions"/* "$ROOTFS"/root/.hermes/*.lock 2>/dev/null || true
 mkdir -p "$ROOTFS/tmp" "$ROOTFS/var/tmp" "$ROOTFS/var/log" "$ROOTFS/var/lib/apt/lists/partial" "$ROOTFS/var/cache/apt/archives/partial"
 chmod 1777 "$ROOTFS/tmp" "$ROOTFS/var/tmp"
 endstep
