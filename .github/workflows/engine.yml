@@ -44,7 +44,7 @@ jobs:
       - name: Host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils proot jq shellcheck
+          sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils jq shellcheck libtalloc-dev
           df -h /
 
       - name: Lint
@@ -79,10 +79,18 @@ jobs:
         continue-on-error: true
         run: sudo SMOKE_TIMEOUT=300 bash engine/smoke-test.sh "$WORK_DIR/rootfs" chroot
 
+      # Ubuntu's apt proot (5.1.0) segfaults on Hermes' python 3.14; the phone runs Termux's proot, so the
+      # host smoke test uses the same termux/proot source built for the runner.
+      - name: Build proot (termux/proot, same code as the phone)
+        run: |
+          git clone -q --depth 1 https://github.com/termux/proot "$RUNNER_TEMP/proot-src"
+          make -s -C "$RUNNER_TEMP/proot-src/src" -j"$(nproc)" proot
+          git -C "$RUNNER_TEMP/proot-src" rev-parse HEAD
+
       - name: Smoke test (proot)
         id: smoke_proot
         continue-on-error: true
-        run: sudo SMOKE_TIMEOUT=420 bash engine/smoke-test.sh "$WORK_DIR/rootfs" proot
+        run: sudo PROOT="$RUNNER_TEMP/proot-src/src/proot" SMOKE_TIMEOUT=420 bash engine/smoke-test.sh "$WORK_DIR/rootfs" proot
 
       - name: Record smoke results
         run: |

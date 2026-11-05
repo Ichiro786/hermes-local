@@ -52,8 +52,9 @@ adb forward tcp:19119 tcp:9119
   echo "GET / -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19119/)"
   echo "GET /api/auth/providers -> $(curl -s http://127.0.0.1:19119/api/auth/providers | head -c 300)"
   echo "GET /api/config (no login) -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19119/api/config)"
-  echo "POST /auth/password-login -> $(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+  echo "POST /auth/password-login -> $(curl -s -o /dev/null -w '%{http_code}' -c "$OUT/cookies" -H 'Content-Type: application/json' \
     -d '{"provider":"basic","username":"admin","password":"e2e-password-123"}' http://127.0.0.1:19119/auth/password-login)"
+  echo "GET /api/config (logged in) -> $(curl -s -o /dev/null -w '%{http_code}' -b "$OUT/cookies" http://127.0.0.1:19119/api/config)"
 } | tee "$OUT/dashboard-check.txt"
 sleep 8
 # Lever back down (stop) on camera.
@@ -66,5 +67,7 @@ adb shell run-as $PKG cat files/engine/logs/engine.log >"$OUT/engine.log" 2>/dev
 adb shell dumpsys gfxinfo $PKG >"$OUT/gfxinfo.txt" 2>/dev/null || true
 kill $LOGCAT 2>/dev/null
 grep -E "Janky frames|Total frames|90th|99th" "$OUT/gfxinfo.txt" || true
-[ "$ok" = 1 ] && grep -q "password-login -> 200" "$OUT/dashboard-check.txt" && { echo "E2E PASS"; exit 0; }
+rm -f "$OUT/cookies"
+[ "$ok" = 1 ] && grep -q "password-login -> 200" "$OUT/dashboard-check.txt" && grep -q "(no login) -> 401" "$OUT/dashboard-check.txt" && \
+  grep -q "(logged in) -> 200" "$OUT/dashboard-check.txt" && { echo "E2E PASS"; exit 0; }
 echo "E2E FAIL"; exit 1
