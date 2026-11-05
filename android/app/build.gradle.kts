@@ -79,7 +79,12 @@ android {
     testOptions {
         // Robolectric + Roborazzi screenshots of the main screen (./gradlew :app:testDebugUnitTest).
         unitTests.isIncludeAndroidResources = true
-        unitTests.all { it.systemProperty("roborazzi.test.record", "true") }
+        unitTests.all {
+            it.systemProperty("roborazzi.test.record", "true")
+            it.systemProperty("shots.dir", System.getenv("SHOTS_DIR") ?: "build/shots")
+            // Robolectric reaches into JDK internals (FileDescriptor etc.) on newer JDKs.
+            it.jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED", "--add-opens=java.base/java.lang=ALL-UNNAMED", "--add-opens=java.base/java.nio=ALL-UNNAMED")
+        }
     }
 
     lint {
