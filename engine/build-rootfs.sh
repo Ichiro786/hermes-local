@@ -33,10 +33,12 @@ endstep() { echo "::endgroup::"; }
 fetch() { curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error --retry 3 "$@"; }
 
 [ "$(id -u)" -eq 0 ] || fail "run as root"
-case "$(uname -m)" in
-  aarch64) ARCH=arm64 ;;
-  x86_64) ARCH=amd64 ;;
-  *) fail "unsupported host arch $(uname -m)" ;;
+# TARGET_ARCH=arm64|amd64 (default: the host's). A foreign arch needs qemu-user-static binfmt with
+# the F (fix-binary) flag, so the chroot runs the target's binaries transparently.
+case "${TARGET_ARCH:-$(uname -m)}" in
+  aarch64|arm64) ARCH=arm64 ;;
+  x86_64|amd64) ARCH=amd64 ;;
+  *) fail "unsupported arch ${TARGET_ARCH:-$(uname -m)}" ;;
 esac
 ASSET_ARCH=$([ "$ARCH" = arm64 ] && echo arm64 || echo x86_64)
 
