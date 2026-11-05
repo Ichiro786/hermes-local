@@ -27,7 +27,7 @@ import org.robolectric.annotation.GraphicsMode
 /** Visual evidence of the main screen: lever OFF, ON, and a frame sequence of it switching on. */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [36], qualifiers = "w411dp-h891dp-night-xxhdpi")
+@Config(sdk = [35], qualifiers = "w411dp-h891dp-night-xxhdpi")
 class LeverScreenshotTest {
     @get:Rule val compose = createComposeRule()
     private val out = System.getProperty("shots.dir") ?: "build/shots"
