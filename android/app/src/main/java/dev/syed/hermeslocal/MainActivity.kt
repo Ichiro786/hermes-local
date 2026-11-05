@@ -16,10 +16,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,7 +72,7 @@ class MainActivity : ComponentActivity() {
                     if (Build.VERSION.SDK_INT >= 33) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
                 BackHandler(enabled = screen != Screen.Main) { screen = if (screen == Screen.Logs) Screen.Settings else Screen.Main }
-                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
                     AnimatedContent(
                         targetState = screen,
                         transitionSpec = {
