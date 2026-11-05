@@ -26,6 +26,8 @@ android {
         versionName = (project.findProperty("versionName") as String?) ?: "1.0.0"
         ndk { abiFilters += engineAbi }
         buildConfigField("String", "ENGINE_ABI", "\"$engineAbi\"")
+        // CI emulator builds only: intent extras drive setup (ci_password, ci_toggle) without UI automation.
+        buildConfigField("boolean", "CI_HOOKS", "${(project.findProperty("ciHooks") as String?) == "true"}")
         buildConfigField("String", "ENGINE_REPO", "\"Ichiro786/hermes-local\"")
         buildConfigField("String", "ENGINE_TAG", "\"${(project.findProperty("engineTag") as String?) ?: "engine-v0.22.7-1"}\"")
     }

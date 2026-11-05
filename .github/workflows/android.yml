@@ -1,0 +1,114 @@
+name: Android APK
+
+# Builds the release APK (arm64-v8a, engine bundled, signed with the CI keystore from repo secrets)
+# and an x86_64 CI variant that is installed on an API 36 emulator: app launch, first-run engine
+# install, password, lever on -> dashboard answers on 127.0.0.1:9119 inside the emulator, screen video.
+#
+# Secrets: ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
+
+on:
+  workflow_dispatch:
+    inputs:
+      engine_tag:
+        description: "Engine release to bundle"
+        default: "engine-v0.22.7-1"
+      version_name:
+        default: "1.0.0"
+      emulator:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: android-actions/setup-android@v3
+        with: { packages: "platforms;android-37.0 build-tools;37.0.0 platform-tools" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "9.8.2" }
+      - run: sudo apt-get install -y --no-install-recommends patchelf
+      - name: Engine payload
+        run: |
+          mkdir -p engine-dl
+          gh release download "${{ inputs.engine_tag }}" --repo "$GITHUB_REPOSITORY" -D engine-dl -p 'rootfs-arm64.tar.xz*'
+          ls -l engine-dl
+      - name: Keystore
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          [ -n "$KS" ] || { echo "::error::ANDROID_KEYSTORE_B64 secret missing"; exit 1; }
+          echo "$KS" | base64 -d >"$RUNNER_TEMP/release.jks"
+      - name: Build release APK
+        env:
+          ENGINE_DIR: engine-dl
+          ENGINE_TAG: ${{ inputs.engine_tag }}
+          VERSION_NAME: ${{ inputs.version_name }}
+          VERSION_CODE: ${{ github.run_number }}
+          GRADLE: gradle
+          KEYSTORE_FILE: ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash scripts/build-apk.sh
+      - name: Verify signature
+        run: $ANDROID_HOME/build-tools/37.0.0/apksigner verify --print-certs out/*.apk | head -5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hermes-local-${{ inputs.version_name }}-arm64-v8a
+          path: out/*.apk
+          compression-level: 0
+
+  emulator:
+    if: ${{ inputs.emulator }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: android-actions/setup-android@v3
+        with: { packages: "platforms;android-37.0 build-tools;37.0.0 platform-tools" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "9.8.2" }
+      - run: sudo apt-get install -y --no-install-recommends patchelf
+      - name: Engine payload (x86_64)
+        run: |
+          mkdir -p engine-dl
+          gh release download "${{ inputs.engine_tag }}" --repo "$GITHUB_REPOSITORY" -D engine-dl -p 'rootfs-x86_64.tar.xz*'
+      - name: Build x86_64 CI APK (debug key, CI hooks)
+        env:
+          ENGINE_DIR: engine-dl
+          ABI: x86_64
+          GRADLE: gradle
+          GRADLE_ARGS: -PciHooks=true
+        run: bash scripts/build-apk.sh
+      - name: Emulator e2e
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          ram-size: 6144M
+          disk-size: 12G
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: bash scripts/e2e-emulator.sh out/hermes-local-1.0.0-x86_64.apk e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emulator-evidence
+          path: e2e/

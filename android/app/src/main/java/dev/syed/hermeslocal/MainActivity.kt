@@ -29,6 +29,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.IntOffset
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.syed.hermeslocal.engine.EngineState
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import dev.syed.hermeslocal.ui.HermesTheme
 import dev.syed.hermeslocal.ui.LogsScreen
 import dev.syed.hermeslocal.ui.MainScreen
@@ -38,10 +40,29 @@ import dev.syed.hermeslocal.ui.SettingsScreen
 enum class Screen { Main, Settings, Providers, Logs }
 
 class MainActivity : ComponentActivity() {
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleCiHooks(intent)
+    }
+
+    /** CI only (BuildConfig.CI_HOOKS): `am start -e ci_password X --ez ci_toggle true` sets up and flips the lever. */
+    private fun handleCiHooks(intent: android.content.Intent?) {
+        if (!BuildConfig.CI_HOOKS || intent == null) return
+        val pw = intent.getStringExtra("ci_password")
+        val toggle = if (intent.hasExtra("ci_toggle")) intent.getBooleanExtra("ci_toggle", false) else null
+        AppController.scope.launch {
+            // Wait for the first-run install to finish.
+            EngineState.status.first { it.phase != dev.syed.hermeslocal.engine.Phase.Installing && it.phase != dev.syed.hermeslocal.engine.Phase.NotInstalled }
+            if (pw != null) android.util.Log.i("HermesLocalCI", "password: ${AppController.setPassword("admin", pw) ?: "ok"}")
+            if (toggle != null) AppController.toggle(toggle)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         AppController.ensureInstalled()
+        handleCiHooks(intent)
         setContent {
             val settings by AppController.settings.state.collectAsStateWithLifecycle()
             val status by EngineState.status.collectAsStateWithLifecycle()
