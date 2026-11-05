@@ -44,7 +44,7 @@ jobs:
       - name: Host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils jq shellcheck libtalloc-dev
+          sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils jq shellcheck libtalloc-dev gawk
           df -h /
 
       - name: Lint
@@ -84,7 +84,8 @@ jobs:
       - name: Build proot (termux/proot, same code as the phone)
         run: |
           git clone -q --depth 1 https://github.com/termux/proot "$RUNNER_TEMP/proot-src"
-          make -s -C "$RUNNER_TEMP/proot-src/src" -j"$(nproc)" proot
+          # HAS_LOADER_32BIT= : skip the arm32 loader (needs -m32, which aarch64 gcc lacks).
+          make -s -C "$RUNNER_TEMP/proot-src/src" -j"$(nproc)" HAS_LOADER_32BIT= proot
           git -C "$RUNNER_TEMP/proot-src" rev-parse HEAD
 
       - name: Smoke test (proot)
@@ -122,7 +123,12 @@ jobs:
           mkdir out; find dl -type f -exec mv {} out/ \;
           ls -l out
           ls out/rootfs-*.tar.xz >/dev/null || { echo "::error::no payload built"; exit 1; }
-          if grep -l failure out/smoke-*.txt; then echo "::error::smoke test failed; not publishing"; exit 1; fi
+          # Publish only when every requested arch built and passed both smoke tests.
+          for a in $(jq -r '.[]' <<<'${{ inputs.archs }}'); do
+            f=$([ "$a" = arm64 ] && echo arm64 || echo x86_64)
+            [ -f "out/rootfs-$f.tar.xz" ] || { echo "::error::$f payload missing; not publishing"; exit 1; }
+            grep -qx "chroot=success proot=success" "out/smoke-$f.txt" || { echo "::error::$f smoke failed ($(cat out/smoke-$f.txt 2>/dev/null)); not publishing"; exit 1; }
+          done
           {
             echo "Hermes Local engine payload: Hermes Agent ${{ inputs.hermes_ref }}, Ubuntu 24.04, antigravity-oauth plugin, agy CLI."
             echo
