@@ -1,0 +1,43 @@
+#!/bin/bash
+# Hermes Local: provider sign-in helper used by the app's Providers screen.
+#   hermes-local-auth status              key=value: codex=0|1 antigravity=0|1 agy=0|1
+#   hermes-local-auth login codex         device code flow (prints the URL + code, polls)
+#   hermes-local-auth login antigravity   agy Google sign-in (prints the URL, reads the code on stdin)
+#   hermes-local-auth logout codex|antigravity
+set -u
+export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools PYTHONUNBUFFERED=1
+export PATH=/opt/hermes-local/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export BROWSER=echo  # never try to open a browser in proot; the URL is printed instead
+[ -r /etc/ssl/certs/ca-certificates.crt ] && export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+AGY_TOKEN_DIR=/root/.gemini/antigravity-cli
+
+codex_ok() { timeout 60 hermes auth status openai-codex 2>&1 | grep -qiE 'logged in|authenticated|valid|active|signed in' && \
+  ! timeout 60 hermes auth status openai-codex 2>&1 | grep -qiE 'not logged|no credential|not authenticated|not signed'; }
+agy_ok() { ls "$AGY_TOKEN_DIR"/*oauth-token* >/dev/null 2>&1 || ls /root/.gemini/*oauth* >/dev/null 2>&1; }
+
+case "${1:-status}" in
+status)
+  echo "codex=$(codex_ok && echo 1 || echo 0)"
+  echo "antigravity=$(agy_ok && echo 1 || echo 0)"
+  echo "agy=$(command -v agy >/dev/null && echo 1 || echo 0)"
+  ;;
+login)
+  case "${2:-}" in
+  codex) exec hermes auth add openai-codex --type oauth --no-browser ;;
+  antigravity) exec hermes auth add antigravity-oauth --no-browser ;;
+  *) echo "usage: login codex|antigravity" >&2; exit 2 ;;
+  esac
+  ;;
+logout)
+  case "${2:-}" in
+  codex) exec hermes auth logout openai-codex ;;
+  antigravity)
+    rm -f "$AGY_TOKEN_DIR"/*oauth-token* /root/.gemini/*oauth* 2>/dev/null
+    hermes auth logout antigravity-oauth >/dev/null 2>&1 || true
+    echo "Signed out of Antigravity"
+    ;;
+  *) echo "usage: logout codex|antigravity" >&2; exit 2 ;;
+  esac
+  ;;
+*) echo "unknown command" >&2; exit 2 ;;
+esac

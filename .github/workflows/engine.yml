@@ -1,0 +1,130 @@
+name: Engine rootfs
+
+# Builds the Hermes Local engine payload (Ubuntu 24.04 rootfs + Hermes Agent + antigravity-oauth +
+# agy CLI) for arm64 (the phone) and x86_64 (CI emulator only), smoke-tests it in a chroot and in
+# proot, and publishes release `engine-<hermes ref>-<revision>` with sha256 files.
+
+on:
+  workflow_dispatch:
+    inputs:
+      hermes_ref:
+        description: "Hermes Agent release tag (stable)"
+        default: "v0.22.7"
+      revision:
+        description: "Payload revision (engine-<ref>-<revision>)"
+        default: "1"
+      archs:
+        description: "Architectures (json list)"
+        default: '["arm64","x86_64"]'
+      publish:
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: engine-rootfs
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(inputs.archs) }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 150
+    env:
+      OUT_DIR: ${{ github.workspace }}/out
+      WORK_DIR: ${{ github.workspace }}/build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils proot jq shellcheck
+          df -h /
+
+      - name: Lint
+        run: |
+          for f in engine/*.sh engine/rootfs/hermes-local-*; do bash -n "$f"; done
+          shellcheck -S error engine/*.sh engine/rootfs/hermes-local-* || true
+
+      - name: Resolve Hermes commit
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.hermes_ref }}
+        run: |
+          sha=$(git ls-remote https://github.com/NousResearch/hermes-agent "refs/tags/$REF^{}" | cut -f1)
+          [ -n "$sha" ] || sha=$(git ls-remote https://github.com/NousResearch/hermes-agent "refs/tags/$REF" | cut -f1)
+          [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "::error::tag $REF not found"; exit 1; }
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"; echo "Hermes $REF = $sha"
+
+      - name: Build rootfs
+        env:
+          HERMES_REF: ${{ inputs.hermes_ref }}
+          HERMES_COMMIT: ${{ steps.ref.outputs.sha }}
+          ENGINE_REVISION: ${{ inputs.revision }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          sudo --preserve-env=OUT_DIR,WORK_DIR,HERMES_REF,HERMES_COMMIT,ENGINE_REVISION,GIT_SHA bash engine/build-rootfs.sh
+          sudo chown -R "$(id -u):$(id -g)" "$OUT_DIR"
+          ls -l "$OUT_DIR"
+
+      - name: Smoke test (chroot)
+        id: smoke_chroot
+        continue-on-error: true
+        run: sudo SMOKE_TIMEOUT=300 bash engine/smoke-test.sh "$WORK_DIR/rootfs" chroot
+
+      - name: Smoke test (proot)
+        id: smoke_proot
+        continue-on-error: true
+        run: sudo SMOKE_TIMEOUT=420 bash engine/smoke-test.sh "$WORK_DIR/rootfs" proot
+
+      - name: Record smoke results
+        run: |
+          echo "chroot=${{ steps.smoke_chroot.outcome }} proot=${{ steps.smoke_proot.outcome }}" | tee out/smoke-${{ matrix.arch }}.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.arch }}
+          path: out/*
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: ${{ inputs.publish && !cancelled() }}
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: Publish release
+        env:
+          TAG: engine-${{ inputs.hermes_ref }}-${{ inputs.revision }}
+        run: |
+          set -euo pipefail
+          mkdir out; find dl -type f -exec mv {} out/ \;
+          ls -l out
+          ls out/rootfs-*.tar.xz >/dev/null || { echo "::error::no payload built"; exit 1; }
+          {
+            echo "Hermes Local engine payload: Hermes Agent ${{ inputs.hermes_ref }}, Ubuntu 24.04, antigravity-oauth plugin, agy CLI."
+            echo
+            for f in out/rootfs-*.tar.xz; do echo "- \`$(basename "$f")\`: $(( $(stat -c %s "$f") / 1048576 )) MiB, sha256 \`$(cut -d' ' -f1 "$f.sha256")\`"; done
+            echo
+            echo "Smoke tests: $(cat out/smoke-*.txt 2>/dev/null | tr '\n' ' ')"
+            echo "x86_64 is for the CI emulator only. Built by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >notes.md
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" out/* --title "Engine ${TAG#engine-}" --notes-file notes.md --latest=false --repo "$GITHUB_REPOSITORY"
+          fi

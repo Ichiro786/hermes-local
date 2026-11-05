@@ -1,0 +1,65 @@
+#!/bin/bash
+# Hermes Local: start the Hermes dashboard (and optionally the messaging gateway / API server).
+# Run by the Android app inside proot as: /bin/bash /opt/hermes-local/bin/hermes-local-start
+# Settings come from /root/.hermes-local/settings.env, written by the app (KEY=VALUE lines):
+#   HL_HOST=127.0.0.1|0.0.0.0   HL_PORT=9119   HL_API_SERVER=0|1   HL_API_PORT=8642
+# Prints HERMES_LOCAL_READY <url> once the dashboard answers, HERMES_LOCAL_FAILED <why> on failure.
+set -u
+export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools
+export PATH=/opt/hermes-local/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export LANG=${LANG:-C.UTF-8} PYTHONUNBUFFERED=1 TMPDIR=/tmp
+[ -r /etc/ssl/certs/ca-certificates.crt ] && export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+STATE=/root/.hermes-local
+mkdir -p "$STATE" "$HERMES_HOME" /tmp
+HL_HOST=127.0.0.1 HL_PORT=9119 HL_API_SERVER=0 HL_API_PORT=8642
+# shellcheck disable=SC1091
+[ -f "$STATE/settings.env" ] && . "$STATE/settings.env"
+case "$HL_HOST" in 127.0.0.1|0.0.0.0) ;; *) HL_HOST=127.0.0.1 ;; esac
+[[ $HL_PORT =~ ^[0-9]+$ ]] || HL_PORT=9119
+[[ $HL_API_PORT =~ ^[0-9]+$ ]] || HL_API_PORT=8642
+
+[ -s /etc/machine-id ] || (cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | sha256sum) | tr -d '-' | cut -c1-32 >/etc/machine-id
+
+if ! hermes-local-passwd --check >/dev/null 2>&1; then
+  echo "HERMES_LOCAL_FAILED no dashboard password set"
+  exit 3
+fi
+
+# On Android every app can reach 127.0.0.1, so the dashboard must never run in Hermes' unauthenticated
+# loopback mode (where the SPA hands out a session token). A non-loopback public_url engages the
+# password gate even on a loopback bind; a 0.0.0.0 bind engages it by itself.
+if [ "$HL_HOST" = 127.0.0.1 ]; then
+  export HERMES_DASHBOARD_PUBLIC_URL="http://hermes-local.lan:$HL_PORT"
+fi
+
+pids=()
+cleanup() { for p in "${pids[@]}"; do kill -TERM "$p" 2>/dev/null; done; wait; exit 0; }
+trap cleanup TERM INT HUP
+
+if [ "$HL_API_SERVER" = 1 ]; then
+  if [ ! -s "$STATE/api-key" ]; then
+    (umask 077; head -c 32 /dev/urandom | base64 | tr -d '/+=\n' >"$STATE/api-key")
+  fi
+  API_SERVER_ENABLED=true API_SERVER_HOST="$HL_HOST" API_SERVER_PORT="$HL_API_PORT" \
+    API_SERVER_KEY="$(cat "$STATE/api-key")" hermes gateway run 2>&1 | sed -u 's/^/[gateway] /' &
+  pids+=($!)
+fi
+
+hermes dashboard --host "$HL_HOST" --port "$HL_PORT" --no-open --skip-build 2>&1 | sed -u 's/^/[dashboard] /' &
+pids+=($!)
+
+ready=0
+for _ in $(seq 1 600); do
+  if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$HL_PORT/api/auth/providers"; then ready=1; break; fi
+  kill -0 "${pids[-1]}" 2>/dev/null || break
+  sleep 0.5
+done
+if [ "$ready" = 1 ]; then
+  echo "HERMES_LOCAL_READY http://127.0.0.1:$HL_PORT"
+else
+  echo "HERMES_LOCAL_FAILED dashboard did not answer on port $HL_PORT"
+fi
+wait "${pids[-1]}"
+rc=$?
+cleanup
+exit $rc

@@ -1,0 +1,15 @@
+#!/bin/bash
+# Hermes Local: set the dashboard username/password. The password is read from stdin (never argv/env).
+#   hermes-local-passwd [username]   reads the password from stdin, writes scrypt hash to config.yaml
+#   hermes-local-passwd --check      exit 0 when a username + password hash are configured
+#   hermes-local-passwd --username   prints the configured username
+set -u
+export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools
+PY=$(sed -n '1s/^#!//p' "$(readlink -f /usr/local/bin/hermes)" 2>/dev/null)
+for c in "$PY" /opt/hermes/hermes-agent/venv/bin/python /opt/hermes/hermes-agent/.venv/bin/python; do
+  [ -n "$c" ] && [ -x "$c" ] && { PY=$c; break; }
+done
+cd /opt/hermes/hermes-agent || exit 1
+MODE=set USERNAME=${1:-admin}
+case "${1:-}" in --check) MODE=check ;; --username) MODE=username ;; esac
+exec "$PY" /opt/hermes-local/bin/hermes_local_passwd.py "$MODE" "$USERNAME"
