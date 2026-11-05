@@ -19,7 +19,8 @@ mounted=("$M")
 cleanup() {
   [ -n "${runner:-}" ] && kill -TERM "$runner" 2>/dev/null
   sleep 3
-  pkill -KILL -f "hermes" 2>/dev/null
+  # Match only the engine processes: a bare "hermes" pattern also matches this script's own path.
+  pkill -KILL -f "/opt/hermes" 2>/dev/null; pkill -KILL -f "hermes (dashboard|gateway)" 2>/dev/null
   local i
   for ((i = ${#mounted[@]} - 1; i >= 0; i--)); do umount -l "${mounted[$i]}" 2>/dev/null; done
   rm -rf "$work"
@@ -63,18 +64,19 @@ if [ "$rc" = 0 ]; then
   base="http://127.0.0.1:$PORT"
   echo "== GET / -> $(curl -s -o /dev/null -w '%{http_code}' "$base/")"
   providers=$(curl -s "$base/api/auth/providers"); echo "== providers: $providers"
-  unauth=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/status")
-  echo "== unauthenticated /api/status -> $unauth (401 = password gate on)"
+  echo "== public /api/status -> $(curl -s -o /dev/null -w '%{http_code}' "$base/api/status") (liveness probe, public by design)"
+  unauth=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/config")
+  echo "== unauthenticated /api/config -> $unauth (401 = password gate on)"
   pname=$(jq -r '[.providers[]? // .[]? | select((.supports_password // .password // false) == true) | .name] | first // "basic"' <<<"$providers" 2>/dev/null || echo basic)
   login=$(curl -s -o "$work/login.json" -w '%{http_code}' -c "$work/cookies" -H 'Content-Type: application/json' \
     -d "{\"provider\":\"$pname\",\"username\":\"admin\",\"password\":\"$PW\"}" "$base/auth/password-login")
   echo "== password login ($pname) -> $login $(cat "$work/login.json" 2>/dev/null | head -c 300)"
-  authed=$(curl -s -o /dev/null -w '%{http_code}' -b "$work/cookies" "$base/api/status")
-  echo "== authenticated /api/status -> $authed"
+  authed=$(curl -s -o /dev/null -w '%{http_code}' -b "$work/cookies" "$base/api/config")
+  echo "== authenticated /api/config -> $authed"
   bad=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
     -d "{\"provider\":\"$pname\",\"username\":\"admin\",\"password\":\"wrong-password\"}" "$base/auth/password-login")
   echo "== wrong password -> $bad"
-  [ "$login" = 200 ] || rc=1
+  [ "$login" = 200 ] && [ "$unauth" = 401 ] && [ "$authed" = 200 ] || rc=1
   [ "$unauth" = 401 ] || echo "::warning::password gate not engaged on loopback ($unauth)"
   echo "== hermes-local-auth status"; run /bin/bash /opt/hermes-local/bin/hermes-local-auth status
 fi

@@ -51,7 +51,7 @@ adb forward tcp:19119 tcp:9119
 {
   echo "GET / -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19119/)"
   echo "GET /api/auth/providers -> $(curl -s http://127.0.0.1:19119/api/auth/providers | head -c 300)"
-  echo "GET /api/status (no login) -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19119/api/status)"
+  echo "GET /api/config (no login) -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19119/api/config)"
   echo "POST /auth/password-login -> $(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
     -d '{"provider":"basic","username":"admin","password":"e2e-password-123"}' http://127.0.0.1:19119/auth/password-login)"
 } | tee "$OUT/dashboard-check.txt"
