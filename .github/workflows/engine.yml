@@ -114,6 +114,7 @@ jobs:
           mkdir out; find dl -type f -exec mv {} out/ \;
           ls -l out
           ls out/rootfs-*.tar.xz >/dev/null || { echo "::error::no payload built"; exit 1; }
+          if grep -l failure out/smoke-*.txt; then echo "::error::smoke test failed; not publishing"; exit 1; fi
           {
             echo "Hermes Local engine payload: Hermes Agent ${{ inputs.hermes_ref }}, Ubuntu 24.04, antigravity-oauth plugin, agy CLI."
             echo

@@ -5,11 +5,14 @@
 #   hermes-local-passwd --username   prints the configured username
 set -u
 export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools
-PY=$(sed -n '1s/^#!//p' "$(readlink -f /usr/local/bin/hermes)" 2>/dev/null)
-for c in "$PY" /opt/hermes/hermes-agent/venv/bin/python /opt/hermes/hermes-agent/.venv/bin/python; do
-  [ -n "$c" ] && [ -x "$c" ] && { PY=$c; break; }
-done
 cd /opt/hermes/hermes-agent || exit 1
+# The Hermes venv python (the launcher may be a shell wrapper, so its shebang is not a safe guess).
+PY=""
+shebang=$(sed -n '1s/^#!//p' "$(readlink -f /usr/local/bin/hermes)" 2>/dev/null)
+for c in /opt/hermes/hermes-agent/venv/bin/python /opt/hermes/hermes-agent/.venv/bin/python "${shebang%% *}"; do
+  [ -n "$c" ] && [ -x "$c" ] && "$c" -c 'import hermes_cli' 2>/dev/null && { PY=$c; break; }
+done
+[ -n "$PY" ] || { echo "hermes-local-passwd: Hermes python not found" >&2; exit 1; }
 MODE=set USERNAME=${1:-admin}
 case "${1:-}" in --check) MODE=check ;; --username) MODE=username ;; esac
 exec "$PY" /opt/hermes-local/bin/hermes_local_passwd.py "$MODE" "$USERNAME"
