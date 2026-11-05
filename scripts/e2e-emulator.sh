@@ -9,6 +9,7 @@ PKG=dev.syed.hermeslocal
 mkdir -p "$OUT"
 adb wait-for-device
 adb shell settings put global window_animation_scale 1
+adb shell cmd uimode night yes || true   # the AMOLED look Syed approved
 adb install -r -g "$APK" || exit 1
 adb shell dumpsys deviceidle whitelist +$PKG >/dev/null 2>&1 || true
 adb logcat -c

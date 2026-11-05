@@ -103,6 +103,7 @@ jobs:
           api-level: 36
           arch: x86_64
           target: google_apis
+          profile: pixel_7
           ram-size: 6144M
           disk-size: 12G
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
