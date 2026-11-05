@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Downloads proot + its two libraries from the Termux arm64 repository, verifies each .deb against
+# (From OpenBot Local.) Downloads proot + its two libraries from the Termux repository, verifies each .deb against
 # the repository index, and puts them into android/src/main/jniLibs/arm64-v8a under the names
 # EnginePaths.kt / ProotCommand.kt expect:
 #
@@ -25,12 +25,15 @@ set -euo pipefail
 export LC_ALL=C
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-MODULE_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+# Hermes Local: ABI=arm64-v8a (phone, default) or x86_64 (CI emulator).
+ABI="${ABI:-arm64-v8a}"
+case "$ABI" in arm64-v8a) TARCH=aarch64 ;; x86_64) TARCH=x86_64 ;; *) echo "bad ABI $ABI" >&2; exit 1 ;; esac
 REPO="${TERMUX_REPO:-https://packages.termux.dev/apt/termux-main}"
-INDEX_URL="$REPO/dists/stable/main/binary-aarch64/Packages"
-JNI_DIR="$MODULE_DIR/android/src/main/jniLibs/arm64-v8a"
-SUMS_FILE="$MODULE_DIR/android/proot-jnilibs.sha256"
-LOCK_FILE="$SCRIPT_DIR/proot.lock"
+INDEX_URL="$REPO/dists/stable/main/binary-$TARCH/Packages"
+JNI_DIR="$ROOT_DIR/android/app/src/main/jniLibs/$ABI"
+SUMS_FILE="$ROOT_DIR/android/app/proot-jnilibs-$ABI.sha256"
+LOCK_FILE="$SCRIPT_DIR/proot-$ABI.lock"
 MIN_PROOT=5.1.107.91 # .90 and older: broken on Android 15 / hang on some kernels
 
 fail() { echo "fetch-proot: $*" >&2; exit 1; }
