@@ -13,7 +13,7 @@
 #   /root/.hermes              HERMES_HOME: config, auth, plugins, sessions (user data; kept on update)
 #
 # Env: OUT_DIR, WORK_DIR, HERMES_REF (tag, default v0.22.7), HERMES_COMMIT (sha of that tag),
-#      ENGINE_REVISION, GIT_SHA, XZ_LEVEL (default 9), WITH_AGY (default 1)
+#      ENGINE_REVISION, GIT_SHA, XZ_LEVEL (default 7: multithreaded within memory), WITH_AGY (default 1)
 set -euo pipefail
 export LC_ALL=C DEBIAN_FRONTEND=noninteractive
 
@@ -23,7 +23,7 @@ WORK_DIR=$(realpath -m "${WORK_DIR:-./build}")
 ROOTFS="$WORK_DIR/rootfs"
 HERMES_REF="${HERMES_REF:-v0.22.7}"
 HERMES_COMMIT="${HERMES_COMMIT:-}"
-XZ_LEVEL="${XZ_LEVEL:-9}"
+XZ_LEVEL="${XZ_LEVEL:-7}"
 WITH_AGY="${WITH_AGY:-1}"
 UBUNTU_BASE_DIR="${UBUNTU_BASE_DIR:-https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release}"
 
@@ -208,7 +208,7 @@ step "Pack rootfs-$ASSET_ARCH.tar.xz"
 asset="rootfs-$ASSET_ARCH.tar.xz"
 # --hard-dereference: Android's app domain cannot create hard links.
 tar -C "$ROOTFS" --numeric-owner --owner=0 --group=0 --hard-dereference --sort=name \
-  --exclude='./dev/*' --exclude='./proc/*' --exclude='./sys/*' -cf - . | xz -T0 "-$XZ_LEVEL" --check=crc64 >"$OUT_DIR/$asset"
+  --exclude='./dev/*' --exclude='./proc/*' --exclude='./sys/*' -cf - . | xz -T0 --memlimit-compress=60% "-$XZ_LEVEL" --check=crc64 >"$OUT_DIR/$asset"
 (cd "$OUT_DIR" && sha256sum "$asset" >"$asset.sha256")
 sha=$(cut -d' ' -f1 "$OUT_DIR/$asset.sha256")
 compressed=$(stat -c %s "$OUT_DIR/$asset")
