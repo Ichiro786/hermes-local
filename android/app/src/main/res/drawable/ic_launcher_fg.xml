@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Throttle lever on its quadrant arc. 108dp canvas, safe zone 66dp. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:strokeColor="#FF4DD0A1" android:strokeWidth="3" android:strokeLineCap="round"
+        android:fillColor="#00000000" android:pathData="M36,74 A30,30 0 0 1 72,74" />
+    <path android:fillColor="#FFB8C4CC" android:pathData="M52,40 L56,40 L57,74 L51,74 Z" />
+    <path android:fillColor="#FFE8EEF2" android:pathData="M41,32 h26 a5,5 0 0 1 5,5 v2 a5,5 0 0 1 -5,5 h-26 a5,5 0 0 1 -5,-5 v-2 a5,5 0 0 1 5,-5 z" />
+    <path android:fillColor="#FF4DD0A1" android:pathData="M44,36.5 h20 v3 h-20 z" />
+    <path android:fillColor="#FFE8EEF2" android:pathData="M54,78 m-5,0 a5,5 0 1 0 10,0 a5,5 0 1 0 -10,0" />
+</vector>
