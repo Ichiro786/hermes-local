@@ -6,10 +6,14 @@
 set -u
 export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools
 cd /opt/hermes/hermes-agent || exit 1
-# The Hermes venv python (the launcher may be a shell wrapper, so its shebang is not a safe guess).
+# Hermes' own python. The installer ships a standalone CPython under /opt/hermes/tools and the launcher
+# is a /bin/sh wrapper, so take the interpreter named in the real launcher, then known locations.
 PY=""
-shebang=$(sed -n '1s/^#!//p' "$(readlink -f /usr/local/bin/hermes)" 2>/dev/null)
-for c in /opt/hermes/hermes-agent/venv/bin/python /opt/hermes/hermes-agent/.venv/bin/python "${shebang%% *}"; do
+launcher=$(readlink -f /usr/local/bin/hermes)
+real=$(sed -n 's/^exec \([^ ]*\) .*/\1/p' "$launcher" 2>/dev/null | head -n1)
+[ -n "$real" ] && [ -f "$real" ] && launcher=$real
+from_launcher=$(grep -aoE '/[^ "]*/bin/python3?[0-9.]*' "$launcher" 2>/dev/null | head -n1)
+for c in "$from_launcher" /opt/hermes/tools/python-*/bin/python3 /opt/hermes/hermes-agent/venv/bin/python /opt/hermes/hermes-agent/.venv/bin/python; do
   [ -n "$c" ] && [ -x "$c" ] && "$c" -c 'import hermes_cli' 2>/dev/null && { PY=$c; break; }
 done
 [ -n "$PY" ] || { echo "hermes-local-passwd: Hermes python not found" >&2; exit 1; }

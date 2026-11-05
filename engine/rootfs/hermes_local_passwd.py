@@ -3,6 +3,11 @@
 import secrets, sys
 mode, username = sys.argv[1], sys.argv[2]
 sys.path.insert(0, "/opt/hermes/hermes-agent")
+# The Hermes launcher imports hermes_bootstrap first; it puts the dependency environment on sys.path.
+try:
+    import hermes_bootstrap  # noqa: F401
+except ImportError:
+    pass
 from hermes_cli.config import load_config, save_config
 cfg = load_config()
 basic = (cfg.get("dashboard") or {}).get("basic_auth") or {}
