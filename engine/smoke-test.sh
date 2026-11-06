@@ -96,7 +96,7 @@ if [ "$rc" = 0 ]; then
   note() { echo "CHECK note $1"; }
 
   echo "== self-update never runs"
-  run /bin/bash -c 'cd /opt/hermes/hermes-agent && $(sed -n "s/^exec \([^ ]*\) .*/\1/p" $(readlink -f /usr/local/bin/hermes) | head -n1) -I /opt/hermes-local/diag-update.py'
+  run /bin/bash -c '/opt/hermes-local/bin/hermes-py -I /opt/hermes-local/diag-update.py'
   check "no source-update message in engine log" "$(grep -qiE 'source-update|update is still running' "$log" && echo 0 || echo 1)"
 
   echo "== dashboard endpoints the Hermes apps use"
@@ -120,17 +120,17 @@ if [ "$rc" = 0 ]; then
 
   echo "== hermes-local-auth status"; run /bin/bash /opt/hermes-local/bin/hermes-local-auth status
   echo "== chat before any provider sign-in (expect: not connected)"
-  echo "$PW" | run /bin/bash -c 'cd /opt/hermes/hermes-agent && HL_CHAT_TIMEOUT=90 $(sed -n "s/^exec \([^ ]*\) .*/\1/p" $(readlink -f /usr/local/bin/hermes) | head -n1) -I /opt/hermes-local/bin/hermes_local_chat_check.py http://127.0.0.1:9119 admin Hi' \
+  echo "$PW" | run /bin/bash -c 'HL_CHAT_TIMEOUT=90 /opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_chat_check.py http://127.0.0.1:9119 admin Hi' \
     >"$work/chat-before.txt" 2>&1
   grep -E "CHAT_|MODEL_INFO" "$work/chat-before.txt" | cut -c1-300
   check "chat before sign-in reports no provider" "$(grep -q 'not connected to any AI provider' "$work/chat-before.txt" && echo 1 || echo 0)"
   echo "== stub Codex sign-in (fake token, Codex routed to the stub) + provider wiring"
   jwt=$(python3 -c 'import base64,json,time;b=lambda o: base64.urlsafe_b64encode(json.dumps(o).encode()).decode().rstrip("=");print(b({"alg":"none"})+"."+b({"exp":int(time.time())+86400,"https://api.openai.com/auth":{"chatgpt_account_id":"stub"}})+".sig")')
   run /bin/bash -lc "hermes auth add openai-codex --type api-key --api-key '$jwt' --label stub-account </dev/null 2>&1 | tail -n 2"
-  ensure=$(run /bin/bash -lc 'cd /opt/hermes/hermes-agent && $(sed -n "s/^exec \([^ ]*\) .*/\1/p" $(readlink -f /usr/local/bin/hermes) | head -n1) -I /opt/hermes-local/bin/hermes_local_provider.py ensure openai-codex' 2>&1 | tail -n1)
+  ensure=$(run /bin/bash -lc '/opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_provider.py ensure openai-codex' 2>&1 | tail -n1)
   echo "   ensure -> $ensure"
   check "provider ensure sets openai-codex" "$(grep -q '"provider": "openai-codex"' <<<"$ensure" && echo 1 || echo 0)"
-  echo "$PW" | run /bin/bash -c 'cd /opt/hermes/hermes-agent && HL_CHAT_TIMEOUT=180 $(sed -n "s/^exec \([^ ]*\) .*/\1/p" $(readlink -f /usr/local/bin/hermes) | head -n1) -I /opt/hermes-local/bin/hermes_local_chat_check.py http://127.0.0.1:9119 admin Hi' \
+  echo "$PW" | run /bin/bash -c 'HL_CHAT_TIMEOUT=180 /opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_chat_check.py http://127.0.0.1:9119 admin Hi' \
     >"$work/chat-after.txt" 2>&1
   grep -E "CHAT_|MODEL_INFO|message.complete" "$work/chat-after.txt" | cut -c1-300
   check "streaming chat turn through /api/ws (stub Codex)" "$(grep -q '^CHAT_OK' "$work/chat-after.txt" && echo 1 || echo 0)"

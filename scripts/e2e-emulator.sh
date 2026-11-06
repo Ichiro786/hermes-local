@@ -53,7 +53,7 @@ wait_log() { # wait_log <regex> <seconds>: 0 when a CI log line matches in time
 rec_start() { ( for i in 1 2 3 4 5; do [ -f "$P/.recstop" ] && break; adb shell screenrecord --time-limit 175 --bit-rate 6000000 /sdcard/prov-$i.mp4; done ) & RECP=$!; }
 rec_stop() { touch "$P/.recstop"; adb shell pkill -INT screenrecord; sleep 4; kill $RECP 2>/dev/null
   for i in 1 2 3 4 5; do adb pull /sdcard/prov-$i.mp4 "$P/providers-$i.mp4" >/dev/null 2>&1 || break; done; rm -f "$P/.recstop"; }
-CHATPY='cd /opt/hermes/hermes-agent && PY=$(sed -n "s/^exec \([^ ]*\) .*/\1/p" $(readlink -f /usr/local/bin/hermes) | head -n1) && echo e2e-password-123 | HL_CHAT_TIMEOUT=150 $PY -I /opt/hermes-local/bin/hermes_local_chat_check.py http://127.0.0.1:9119 admin "Say hi"'
+CHATPY='echo e2e-password-123 | HL_CHAT_TIMEOUT=150 /opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_chat_check.py http://127.0.0.1:9119 admin "Say hi"'
 
 providers_e2e() {
   rec_start

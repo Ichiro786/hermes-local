@@ -1,0 +1,12 @@
+#!/bin/bash
+# Hermes Local: run Hermes' own python (with its dependency environment) from /opt/hermes/hermes-agent.
+#   hermes-py [python args...]     e.g. hermes-py -I /opt/hermes-local/diag-update.py
+# /usr/local/bin/hermes is a /bin/sh wrapper that execs another launcher (v0.23.0:
+# /opt/hermes/hermes-agent/.hermes/bin/hermes), which names the python; follow both.
+launcher=$(readlink -f /usr/local/bin/hermes)
+real=$(sed -n 's/^exec \([^ ]*\) .*/\1/p' "$launcher" 2>/dev/null | head -n1)
+[ -n "$real" ] && [ -f "$real" ] && launcher=$real
+for c in "$(grep -aoE '/[^ "]*/bin/python3?[0-9.]*' "$launcher" 2>/dev/null | head -n1)" /opt/hermes/tools/python-*/bin/python3; do
+  if [ -n "$c" ] && [ -x "$c" ]; then cd /opt/hermes/hermes-agent && exec "$c" "$@"; fi
+done
+echo "hermes-py: Hermes python not found" >&2; exit 127

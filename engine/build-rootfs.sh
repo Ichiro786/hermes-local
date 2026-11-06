@@ -148,7 +148,7 @@ step "No self-update on the phone"
 # and the sign-in command raced for the update lock while re-syncing dependencies).
 #  1. diagnostics: what the launch-time check thinks before we change anything
 install -m 0644 "$SCRIPT_DIR/diag-update.py" "$ROOTFS/opt/hermes-local/diag-update.py"
-in_root "cd /opt/hermes/hermes-agent && \$(sed -n 's/^exec \([^ ]*\) .*/\1/p' \$(readlink -f /usr/local/bin/hermes) | head -n1) -I /opt/hermes-local/diag-update.py" || true
+in_root "/opt/hermes-local/bin/hermes-py -I /opt/hermes-local/diag-update.py" || true
 #  2. updateMechanism=external (what Hermes' own Docker image uses: "the image is rebuilt and
 #     re-pulled, it never updates itself"): venv_sync.prepare_launch then never runs the
 #     source-update completion, and channels refuse.
@@ -167,7 +167,7 @@ printf '{"schema":1,"deployment_kind":"image","manager":"hermes-local","version"
 chmod 0444 "$ROOTFS/etc/hermes/image-provenance.json"
 #  4. agy and plugins never update themselves either.
 in_root "hermes config set plugins.auto_apply false >/dev/null 2>&1 || true"
-in_root "cd /opt/hermes/hermes-agent && \$(sed -n 's/^exec \([^ ]*\) .*/\1/p' \$(readlink -f /usr/local/bin/hermes) | head -n1) -I /opt/hermes-local/diag-update.py" || true
+in_root "/opt/hermes-local/bin/hermes-py -I /opt/hermes-local/diag-update.py" || true
 in_root "hermes update --check 2>&1 | tail -n 3" || true
 endstep
 
@@ -237,7 +237,8 @@ rm -rf "$ROOTFS/root/.hermes/logs"/* "$ROOTFS/root/.hermes/sessions"/* 2>/dev/nu
 # Stale lock/marker files from the build (update lock, pm install locks, agy updater lock).
 echo "lock files left by the build:"; find "$ROOTFS/root" "$ROOTFS/opt/hermes" -xdev \( -name '*.lock' -o -name 'source-completion-pending' \
   -o -name 'hermes-update-pull' \) -print 2>/dev/null | sed "s|^$ROOTFS||"
-find "$ROOTFS/root" "$ROOTFS/opt/hermes" -xdev \( -name '*.lock' -o -name 'source-completion-pending' \) -type f -delete 2>/dev/null || true
+# Only empty flock files: uv.lock & co. are dependency lockfiles (plugin installs need pm/uv.lock).
+find "$ROOTFS/root" "$ROOTFS/opt/hermes" -xdev \( \( -name '*.lock' -size 0 \) -o -name 'source-completion-pending' \) -type f -delete 2>/dev/null || true
 mkdir -p "$ROOTFS/tmp" "$ROOTFS/var/tmp" "$ROOTFS/var/log" "$ROOTFS/var/lib/apt/lists/partial" "$ROOTFS/var/cache/apt/archives/partial"
 chmod 1777 "$ROOTFS/tmp" "$ROOTFS/var/tmp"
 endstep

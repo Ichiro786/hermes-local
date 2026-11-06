@@ -1,5 +1,5 @@
 #!/bin/bash
-# Hermes Local: start the Hermes dashboard (and optionally the messaging gateway / API server).
+# Hermes Local: start the Hermes dashboard and its gateway (sessions, cron; API server optional).
 # Run by the Android app inside proot as: /bin/bash /opt/hermes-local/bin/hermes-local-start
 # Settings come from /root/.hermes-local/settings.env, written by the app (KEY=VALUE lines):
 #   HL_HOST=127.0.0.1|0.0.0.0   HL_PORT=9119   HL_API_SERVER=0|1   HL_API_PORT=8642
@@ -37,14 +37,18 @@ pids=()
 cleanup() { for p in "${pids[@]}"; do kill -TERM "$p" 2>/dev/null; done; wait; exit 0; }
 trap cleanup TERM INT HUP
 
+# Hermes v0.23.0's server dashboard relies on its own gateway: the gateway owns the session store
+# (without it /api/sessions and /api/analytics answer 503 "Session store is not initialized") and runs
+# the cron scheduler. It runs with no messaging platforms too; the API server only when enabled.
+gw_env=()
 if [ "$HL_API_SERVER" = 1 ]; then
   if [ ! -s "$STATE/api-key" ]; then
     (umask 077; head -c 32 /dev/urandom | base64 | tr -d '/+=\n' >"$STATE/api-key")
   fi
-  API_SERVER_ENABLED=true API_SERVER_HOST="$HL_HOST" API_SERVER_PORT="$HL_API_PORT" \
-    API_SERVER_KEY="$(cat "$STATE/api-key")" hermes gateway run 2>&1 | sed -u 's/^/[gateway] /' &
-  pids+=($!)
+  gw_env=(API_SERVER_ENABLED=true API_SERVER_HOST="$HL_HOST" API_SERVER_PORT="$HL_API_PORT" API_SERVER_KEY="$(cat "$STATE/api-key")")
 fi
+env "${gw_env[@]}" hermes gateway run 2>&1 | sed -u 's/^/[gateway] /' &
+pids+=($!)
 
 hermes dashboard --host "$HL_HOST" --port "$HL_PORT" --no-open --skip-build 2>&1 | sed -u 's/^/[dashboard] /' &
 pids+=($!)
@@ -55,6 +59,11 @@ for _ in $(seq 1 600); do
   kill -0 "${pids[-1]}" 2>/dev/null || break
   sleep 0.5
 done
+# The gateway creates the session store on its first start; the apps open sessions right away.
+if [ "$ready" = 1 ]; then
+  for _ in $(seq 1 240); do [ -s "$HERMES_HOME/state.db" ] && break; sleep 0.5; done
+  [ -s "$HERMES_HOME/state.db" ] || echo "[hermes-local] warning: session store not created yet (gateway still starting?)"
+fi
 if [ "$ready" = 1 ]; then
   echo "HERMES_LOCAL_READY http://127.0.0.1:$HL_PORT"
 else
