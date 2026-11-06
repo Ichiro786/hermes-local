@@ -7,6 +7,11 @@
   openai-key set      reads the key from stdin (never argv) and saves it as VOICE_TOOLS_OPENAI_KEY in
                       ~/.hermes/.env (mode 0600). Hermes uses it only for voice: GPT-Live and OpenAI STT/TTS.
   openai-key clear    removes it
+  gemini-key set      reads the key from stdin, saves GEMINI_API_KEY in ~/.hermes/.env (0600) and makes Gemini
+                      the text-to-speech provider (tts.gemini.model GEMINI_TTS_MODEL, voice Kore). Hermes v0.23.0
+                      has no Gemini Live (realtime) voice mode and no Gemini speech-to-text provider, so TTS is
+                      the only place it is used for voice.
+  gemini-key clear    removes it; text-to-speech goes back to Edge
 
 Why the defaults: Hermes v0.23.0 autodetects STT and finds nothing until the stt-whisper extra is
 installed, so /api/audio/transcribe answers 400 "No STT provider available" (the Hermes Android app
@@ -25,6 +30,12 @@ except ImportError:
 STATE = os.environ.get("HL_STATE_DIR", "/root/.hermes-local")
 MARKER = os.path.join(STATE, "voice-defaults-v1")
 KEY_ENV = "VOICE_TOOLS_OPENAI_KEY"
+GEMINI_ENV = "GEMINI_API_KEY"
+# Google's current TTS models (ai.google.dev speech-generation, Nov 2026): gemini-3.8-flash-tts and
+# gemini-3.8-flash-lite-tts; Flash-Lite is the one Google recommends for conversational voice agents.
+# Hermes' own default (gemini-2.5-flash-preview-tts) is closed to new API users.
+GEMINI_TTS_MODEL = os.environ.get("HL_GEMINI_TTS_MODEL", "gemini-3.8-flash-lite-tts")
+GEMINI_TTS_VOICE = "Kore"
 MODEL_FILE = "/opt/hermes-local/whisper-model"  # name of the model the engine build preinstalled
 
 
@@ -69,9 +80,13 @@ def defaults(force=False):
     return 0
 
 
-def _key():
+def _key(env=KEY_ENV):
     from hermes_cli.config import get_env_value
-    return str(get_env_value(KEY_ENV) or "").strip()
+    return str(get_env_value(env) or "").strip()
+
+
+def _hint(k):
+    return ("…" + k[-4:]) if len(k) >= 8 else ""
 
 
 def status():
@@ -87,12 +102,17 @@ def status():
         out["stt_error"] = str(exc)[:200]
     try:
         from tools import tts_tool
-        out["tts_provider"] = tts_tool._get_provider(tts_tool._load_tts_config())
+        tcfg = tts_tool._load_tts_config()
+        out["tts_provider"] = tts_tool._get_provider(tcfg)
+        out["tts_model"] = (tcfg.get(out["tts_provider"]) or {}).get("model", "") if isinstance(tcfg, dict) else ""
     except Exception as exc:  # noqa: BLE001
         out["tts_error"] = str(exc)[:200]
     k = _key()
     out["openai_key"] = 1 if k else 0
-    out["openai_key_hint"] = ("…" + k[-4:]) if len(k) >= 8 else ""
+    out["openai_key_hint"] = _hint(k)
+    g = _key(GEMINI_ENV)
+    out["gemini_key"] = 1 if g else 0
+    out["gemini_key_hint"] = _hint(g)
     try:
         from tools.voice_live import resolve_gpt_live_status
         live = resolve_gpt_live_status()
@@ -129,12 +149,56 @@ def openai_key(action):
     return status()
 
 
+def _set_tts(provider):
+    from hermes_cli.config import read_raw_config, save_config
+    raw = read_raw_config()
+    tts = raw.get("tts") if isinstance(raw.get("tts"), dict) else {}
+    raw["tts"] = tts
+    if provider == "gemini":
+        tts["provider"] = "gemini"
+        gem = tts.get("gemini") if isinstance(tts.get("gemini"), dict) else {}
+        gem.setdefault("model", GEMINI_TTS_MODEL)
+        gem.setdefault("voice", GEMINI_TTS_VOICE)
+        tts["gemini"] = gem
+    elif tts.get("provider") == "gemini":
+        tts["provider"] = "edge"
+    save_config(raw)
+
+
+def gemini_key(action):
+    from hermes_cli.config import remove_env_value, save_env_value
+    if action == "set":
+        key = sys.stdin.readline().strip()
+        if len(key) < 30 or any(c.isspace() for c in key):
+            print(json.dumps({"ok": False, "error": "That does not look like a Gemini API key (AIza…)."}))
+            return 1
+        save_env_value(GEMINI_ENV, key)
+        if _key(GEMINI_ENV) != key:
+            print(json.dumps({"ok": False, "error": "Hermes refused to save the key."}))
+            return 1
+        _set_tts("gemini")
+    elif action == "clear":
+        remove_env_value(GEMINI_ENV)
+        _set_tts("edge")
+    else:
+        print(json.dumps({"ok": False, "error": "usage: gemini-key set|clear"}))
+        return 2
+    try:
+        from hermes_cli.config import get_env_path
+        os.chmod(get_env_path(), 0o600)
+    except OSError:
+        pass
+    return status()
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "status"
     if cmd == "defaults":
         return defaults(force="--force" in argv)
     if cmd == "status":
         return status()
+    if cmd == "gemini-key":
+        return gemini_key(argv[2] if len(argv) > 2 else "")
     if cmd == "openai-key":
         return openai_key(argv[2] if len(argv) > 2 else "")
     print(json.dumps({"ok": False, "error": f"unknown command {cmd}"}))

@@ -155,7 +155,7 @@ G
   tap_node '^OpenAI API key \(sk-'; sleep 1
   adb shell input text sk-hle2e-fake-key-0123456789abcd; sleep 1
   adb shell dumpsys input_method | grep -qE "mInputShown=true|mIsInputViewShown=true|isInputViewShown=true" && adb shell input keyevent 4; sleep 1
-  tap_node '^Save key$'
+  tap_node '^Save key$' --after '^OpenAI API key \(for GPT-Live\)$' --before '^Gemini API key \(for Gemini voice\)$'
   saved=0; for _ in $(seq 1 60); do find_node '^Saved …abcd · GPT-Live ready$' >/dev/null && { saved=1; break; }; sleep 2; done
   shot 19-openai-key-saved
   check "OpenAI key saved -> 'Saved …abcd · GPT-Live ready'" "$saved"
@@ -164,9 +164,28 @@ G
   check "key not shown on screen" "$(grep -q 'sk-hle2e' "$P/19-openai-key-saved.xml" && echo 0 || echo 1)"
   tap_node '^Remove$' --after '^OpenAI API key \(for GPT-Live\)$'; sleep 2
   tap_node '^Remove$' --after '^Remove the OpenAI key\?$'
-  gone=0; for _ in $(seq 1 60); do find_node '^Not set$' >/dev/null && { gone=1; break; }; sleep 2; done
+  gone=0; for _ in $(seq 1 60); do find_node '^Not set$' --after '^Antigravity \(Gemini, Claude\)$' --before '^Gemini API key \(for Gemini voice\)$' >/dev/null && { gone=1; break; }; sleep 2; done
   shot 20-openai-key-removed
   check "Remove clears the key ('Not set')" "$gone"
+
+  echo "== Gemini API key card (Gemini TTS)"
+  tap_node '^Gemini API key \(AIza'; sleep 1
+  adb shell input text AIzaSyHLe2eDummyKey0123456789wxyz; sleep 1
+  adb shell dumpsys input_method | grep -qE "mInputShown=true|mIsInputViewShown=true|isInputViewShown=true" && adb shell input keyevent 4; sleep 1
+  tap_node '^Save key$' --after '^Gemini API key \(for Gemini voice\)$'
+  saved=0; for _ in $(seq 1 60); do find_node '^Saved …wxyz · Gemini TTS ready$' >/dev/null && { saved=1; break; }; sleep 2; done
+  shot 21-gemini-key-saved
+  check "Gemini key saved -> 'Saved …wxyz · Gemini TTS ready'" "$saved"
+  r=$(find_node '^Live Mode hears with '); echo "voice line: $r" | tee -a "$P/checks.txt"
+  check "voice line: speaks with Gemini gemini-3.8-flash-lite-tts" "$(grep -q 'speaks with Gemini gemini-3.8-flash-lite-tts' <<<"$r" && echo 1 || echo 0)"
+  guest 'stat -c "%a" /root/.hermes/.env; grep -c "^GEMINI_API_KEY=" /root/.hermes/.env; grep -A3 "^tts:" /root/.hermes/config.yaml' 60 | tee "$P/gemini-key-env.txt"
+  check "GEMINI_API_KEY in .env (0600) + tts.provider gemini" "$(grep -qx 600 "$P/gemini-key-env.txt" && grep -qx 1 "$P/gemini-key-env.txt" && grep -q 'provider: gemini' "$P/gemini-key-env.txt" && echo 1 || echo 0)"
+  check "Gemini key not shown on screen" "$(grep -q 'HLe2eDummy' "$P/21-gemini-key-saved.xml" && echo 0 || echo 1)"
+  tap_node '^Remove$' --after '^Gemini API key \(for Gemini voice\)$'; sleep 2
+  tap_node '^Remove$' --after '^Remove the Gemini key\?$'
+  gone=0; for _ in $(seq 1 60); do find_node '^Not set$' --after '^OpenAI API key \(sk-' >/dev/null && { gone=1; break; }; sleep 2; done
+  shot 22-gemini-key-removed
+  check "Gemini Remove clears the key, voice back to Edge" "$([ $gone = 1 ] && find_node 'speaks with Edge$' >/dev/null && echo 1 || echo 0)"
   rec_stop
   ci_log >"$P/ci-log.txt"
   [ "$prov_ok" = 1 ]

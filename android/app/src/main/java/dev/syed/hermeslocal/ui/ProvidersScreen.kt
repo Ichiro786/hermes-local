@@ -61,6 +61,8 @@ import dev.syed.hermeslocal.providers.ProviderFlows
 import dev.syed.hermeslocal.providers.ProviderId
 import dev.syed.hermeslocal.providers.SignInFlow
 import dev.syed.hermeslocal.providers.VoiceKey
+import dev.syed.hermeslocal.providers.VoiceKeyKind
+import dev.syed.hermeslocal.providers.VoiceStatus
 import kotlinx.coroutines.launch
 
 /** Model provider sign-in (runs `hermes-local-auth` in the engine). Works whether or not the server is on. */
@@ -151,7 +153,8 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
                 }
             }
         }
-        OpenAiKeyCard()
+        VoiceKeyCard(VoiceKeyKind.OpenAi)
+        VoiceKeyCard(VoiceKeyKind.Gemini)
         notice?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
         statusInfo?.error?.let { Text("Status check failed: $it", color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
     }
@@ -164,42 +167,49 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
     picker?.let { p -> ModelPicker(p, current = statusInfo?.takeIf { it.isChatProvider(p) }?.model, onDismiss = { picker = null }) { notice = it } }
 }
 
-/** Optional OpenAI API key for GPT-Live (Hermes' voice_live needs a real API key; ChatGPT/Codex sign-in can't do it). */
+/** Optional voice API keys, sent to the engine on stdin and kept in Hermes' .env (0600):
+ *  OpenAI for GPT-Live (Hermes' voice_live needs a real API key; a ChatGPT/Codex sign-in can't start it),
+ *  Gemini for Gemini TTS (Hermes v0.23.0 has no Gemini Live voice mode and no Gemini speech-to-text). */
 @Composable
-private fun OpenAiKeyCard() {
+private fun VoiceKeyCard(kind: VoiceKeyKind) {
     val scope = rememberCoroutineScope()
     val voice by VoiceKey.status.collectAsStateWithLifecycle()
     var key by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var confirmRemove by remember { mutableStateOf(false) }
+    val openAi = kind == VoiceKeyKind.OpenAi
+    val title = if (openAi) "OpenAI API key (for GPT-Live)" else "Gemini API key (for Gemini voice)"
+    val v = voice
+    val saved = if (openAi) v?.openAiKey == true else v?.geminiKey == true
     Card(
         Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            val v = voice
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("OpenAI API key (for GPT-Live)", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                if (v == null || busy) LoadingIndicator(Modifier.size(28.dp)) else KeyDot(v.openAiKey)
+                Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                if (v == null || busy) LoadingIndicator(Modifier.size(28.dp)) else KeyDot(saved)
             }
             Text(
-                "Optional. GPT-Live in the Hermes app needs an OpenAI API key (OpenAI bills it per minute); a ChatGPT/Codex " +
-                    "sign-in cannot start it. Live Mode with the Hermes speech engine works without a key. The key stays in Hermes' .env on this phone.",
+                if (openAi) "Optional. GPT-Live in the Hermes app needs an OpenAI API key (OpenAI bills it per minute); a ChatGPT/Codex " +
+                    "sign-in cannot start it. Live Mode with the Hermes speech engine works without a key. The key stays in Hermes' .env on this phone."
+                else "Optional. Hermes speaks its replies with Gemini TTS (Google AI Studio key, billed by Google). Hermes has no Gemini Live " +
+                    "voice mode and no Gemini speech-to-text, so Live Mode keeps hearing with Whisper. Remove the key to go back to the free Edge voice.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (v != null && v.error == null && v.sttProvider.isNotEmpty()) {
-                val hears = if (v.sttProvider == "local") "Whisper ${v.sttModel} on this phone, automatic language" else v.sttProvider
-                Text("Live Mode hears with $hears · speaks with ${v.ttsProvider.replaceFirstChar { it.uppercase() }}", style = MaterialTheme.typography.bodySmall)
-            }
-            if (v?.openAiKey == true) {
+            if (openAi && v != null && v.error == null && v.sttProvider.isNotEmpty()) Text(voiceLine(v), style = MaterialTheme.typography.bodySmall)
+            if (saved && v != null) {
+                val ready = if (openAi) v.gptLive else v.ttsProvider == "gemini"
+                val what = if (openAi) "GPT-Live" else "Gemini TTS"
                 Text(
-                    "Saved ${v.keyHint} · " + if (v.gptLive) "GPT-Live ready" else "GPT-Live not ready",
-                    style = MaterialTheme.typography.bodySmall, color = if (v.gptLive) MaterialTheme.colorScheme.primary else StatusColors.Amber,
+                    "Saved ${if (openAi) v.keyHint else v.geminiHint} · " + if (ready) "$what ready" else "$what not ready",
+                    style = MaterialTheme.typography.bodySmall, color = if (ready) MaterialTheme.colorScheme.primary else StatusColors.Amber,
                 )
             }
+            val hint = if (openAi) "sk-…" else "AIza…"
             OutlinedTextField(
-                key, { key = it.trim(); error = null }, label = { Text(if (v?.openAiKey == true) "Replace key (sk-…)" else "OpenAI API key (sk-…)") },
+                key, { key = it.trim(); error = null }, label = { Text(if (saved) "Replace key ($hint)" else "${if (openAi) "OpenAI" else "Gemini"} API key ($hint)") },
                 singleLine = true, modifier = Modifier.fillMaxWidth(), enabled = !busy,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
@@ -208,24 +218,34 @@ private fun OpenAiKeyCard() {
                 Button(onClick = {
                     busy = true; error = null
                     scope.launch {
-                        error = VoiceKey.save(key)
+                        error = VoiceKey.save(kind, key)
                         if (error == null) key = ""
                         busy = false
                     }
                 }, enabled = !busy && key.length >= 20, shapes = ButtonDefaults.shapes()) { Text("Save key") }
-                if (v?.openAiKey == true) {
+                if (saved) {
                     OutlinedButton(onClick = { confirmRemove = true }, enabled = !busy, shapes = ButtonDefaults.shapes()) { Text("Remove") }
                 }
             }
-            (error ?: v?.error)?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
+            (error ?: v?.error?.takeIf { openAi })?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
         }
     }
     if (confirmRemove) {
-        ConfirmDialog("Remove the OpenAI key?", "GPT-Live stops working. Live Mode with the Hermes speech engine keeps working.", "Remove", { confirmRemove = false }) {
+        ConfirmDialog(
+            if (openAi) "Remove the OpenAI key?" else "Remove the Gemini key?",
+            if (openAi) "GPT-Live stops working. Live Mode with the Hermes speech engine keeps working." else "Hermes goes back to the free Edge voice.",
+            "Remove", { confirmRemove = false },
+        ) {
             busy = true
-            scope.launch { error = VoiceKey.clear(); busy = false }
+            scope.launch { error = VoiceKey.clear(kind); busy = false }
         }
     }
+}
+
+private fun voiceLine(v: VoiceStatus): String {
+    val hears = if (v.sttProvider == "local") "Whisper ${v.sttModel} on this phone, automatic language" else v.sttProvider
+    val speaks = if (v.ttsProvider == "gemini") "Gemini ${v.ttsModel}" else v.ttsProvider.replaceFirstChar { it.uppercase() }
+    return "Live Mode hears with $hears · speaks with $speaks"
 }
 
 @Composable

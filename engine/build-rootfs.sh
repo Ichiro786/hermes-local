@@ -154,6 +154,18 @@ assert \"country\" in text.lower(), text
 import edge_tts; print(\"edge-tts\", edge_tts.__version__)
 '"
 rm -f "$ROOTFS/tmp/jfk.wav"; rm -rf "$ROOTFS/root/.cache"
+# Gemini TTS: Google's current models (gemini-3.8-flash[-lite]-tts) answer generateContent with a complete
+# WAV, while Hermes v0.23.0 always wraps the reply as raw PCM (WAV-in-WAV: a header-sized click). One-line
+# patch: keep a reply that already is RIFF/WAVE as it is. Fails the build if the upstream line moved.
+python3 - "$ROOTFS/opt/hermes/hermes-agent/tools/tts_tool_providers.py" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+old = "return _write_wav_bytes_as(_wrap_pcm_as_wav(base64.b64decode(audio_b64)), output_path)"
+new = ("audio = base64.b64decode(audio_b64)  # hermes-local: 3.8 TTS models already return WAV\n"
+       "    return _write_wav_bytes_as(audio if audio[:4] == b\"RIFF\" else _wrap_pcm_as_wav(audio), output_path)")
+assert s.count(old) == 1, "Gemini TTS return line not found"
+p.write_text(s.replace(old, new)); print("patched Gemini TTS WAV passthrough")
+PY
 printf '%s\n' "$WHISPER_MODEL" >"$ROOTFS/opt/hermes-local/whisper-model"
 size_after=$(du -sb "$ROOTFS" | cut -f1)
 echo "voice size: python deps +$(( (size_deps - size_before) / 1048576 )) MiB, whisper $WHISPER_MODEL model +$(( (size_after - size_deps) / 1048576 )) MiB (installed)"

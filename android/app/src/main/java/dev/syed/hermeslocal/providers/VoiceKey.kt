@@ -13,8 +13,11 @@ data class VoiceStatus(
     val sttProvider: String = "",
     val sttModel: String = "",
     val ttsProvider: String = "",
+    val ttsModel: String = "",
     val openAiKey: Boolean = false,
     val keyHint: String = "",
+    val geminiKey: Boolean = false,
+    val geminiHint: String = "",
     val gptLive: Boolean = false,
     val error: String? = null,
 ) {
@@ -28,8 +31,10 @@ data class VoiceStatus(
                 if (!o.optBoolean("ok", true) && !o.has("stt_provider")) return VoiceStatus(error = o.optString("error"))
                 VoiceStatus(
                     sttProvider = o.optString("stt_provider"), sttModel = o.optString("stt_model"),
-                    ttsProvider = o.optString("tts_provider"), openAiKey = o.optInt("openai_key") == 1,
-                    keyHint = o.optString("openai_key_hint"), gptLive = o.optInt("gpt_live") == 1,
+                    ttsProvider = o.optString("tts_provider"), ttsModel = o.optString("tts_model"),
+                    openAiKey = o.optInt("openai_key") == 1, keyHint = o.optString("openai_key_hint"),
+                    geminiKey = o.optInt("gemini_key") == 1, geminiHint = o.optString("gemini_key_hint"),
+                    gptLive = o.optInt("gpt_live") == 1,
                     error = if (o.has("error")) o.optString("error") else null,
                 )
             } catch (e: Exception) {
@@ -38,6 +43,9 @@ data class VoiceStatus(
         }
     }
 }
+
+/** The optional voice API keys: what `hermes-local-voice <kind>-key set|clear` stores. */
+enum class VoiceKeyKind(val arg: String) { OpenAi("openai"), Gemini("gemini") }
 
 object VoiceKey {
     private val VOICE = listOf("/bin/bash", "/opt/hermes-local/bin/hermes-local-voice")
@@ -53,9 +61,9 @@ object VoiceKey {
     }
 
     /** Saves [key] (sent on stdin, never on the command line). Returns an error or null. */
-    suspend fun save(key: String): String? = apply(listOf("openai-key", "set"), key.trim() + "\n")
+    suspend fun save(kind: VoiceKeyKind, key: String): String? = apply(listOf("${kind.arg}-key", "set"), key.trim() + "\n")
 
-    suspend fun clear(): String? = apply(listOf("openai-key", "clear"), null)
+    suspend fun clear(kind: VoiceKeyKind): String? = apply(listOf("${kind.arg}-key", "clear"), null)
 
     private suspend fun apply(args: List<String>, stdin: String?): String? {
         val r = AppController.runner.run(VOICE + args, stdin = stdin, timeoutSec = 150)

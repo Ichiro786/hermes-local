@@ -4,6 +4,8 @@
 #   hermes-local-voice defaults [--force]  local Whisper STT (auto language) + Edge TTS, once per HERMES_HOME
 #   hermes-local-voice openai-key set      key on stdin -> VOICE_TOOLS_OPENAI_KEY in ~/.hermes/.env (0600)
 #   hermes-local-voice openai-key clear
+#   hermes-local-voice gemini-key set      key on stdin -> GEMINI_API_KEY, text-to-speech = Gemini TTS
+#   hermes-local-voice gemini-key clear    (text-to-speech back to Edge)
 set -u
 export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools PYTHONUNBUFFERED=1
 export PATH=/opt/hermes-local/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

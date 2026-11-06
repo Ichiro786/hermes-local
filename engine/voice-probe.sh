@@ -57,3 +57,27 @@ voice_gptlive_probe() { # optional OpenAI key path (the app's "OpenAI API key (f
   # 502 with OpenAI's 401 = Hermes really sent the SDP offer to api.openai.com/v1/live/sessions.
   note "gpt-live session with fake key -> $code $(grep -oE 'failed \([0-9]+\)' "$work/gl-sess.json" | head -n1)"
 }
+
+voice_gemini_probe() { # optional Gemini key path (the app's "Gemini API key" field): Gemini TTS
+  local strict=${1:-0} code det st ok=0 back
+  [ -f "$M/opt/hermes-local/bin/hermes-local-voice" ] || { note "gemini key path: hermes-local-voice missing (old engine)"; return 0; }
+  echo "== Gemini key path (dummy key)"
+  echo "AIzaSyHermesLocalSmoke$(head -c 9 /dev/urandom | od -An -tx1 | tr -d ' \n')" | run /bin/bash /opt/hermes-local/bin/hermes-local-voice gemini-key set >"$work/gm-set.txt" 2>&1
+  st=$(tail -n1 "$work/gm-set.txt"); echo "   $(sed 's/"gemini_key_hint": "[^"]*"/"gemini_key_hint": "…"/' <<<"$st")"
+  run /bin/bash -c 'grep -A3 "^tts:" /root/.hermes/config.yaml; grep -c "^GEMINI_API_KEY=" /root/.hermes/.env; stat -c %a /root/.hermes/.env' 2>&1 | sed 's/^/   /' | tee "$work/gm-cfg.txt"
+  code=$(curl -s -o "$work/gm-speak.json" -w '%{http_code}' --max-time 120 -b "$work/cookies" -H "Origin: http://127.0.0.1:9119" \
+    -H 'Content-Type: application/json' -d '{"text":"Hello from Hermes Local."}' http://127.0.0.1:9119/api/audio/speak)
+  det=$(head -c 400 "$work/gm-speak.json"); echo "   speak with the dummy key -> $code $det"
+  # Clean failure = Google rejected the key (its "API key not valid" / API_KEY_INVALID / 401 / 403), i.e. the
+  # request reached generativelanguage.googleapis.com with the configured model; bad wiring would say
+  # "No TTS provider", "GEMINI_API_KEY not set" or name an unknown provider/model.
+  grep -q '"tts_provider": "gemini"' <<<"$st" && grep -q '"tts_model": "gemini-3.8-flash-lite-tts"' <<<"$st" && grep -q '"gemini_key": 1' <<<"$st" \
+    && grep -qiE 'Gemini TTS API error \(HTTP (400|401|403)\).*(API key not valid|API_KEY_INVALID|PERMISSION_DENIED|UNAUTHENTICATED|api key)' <<<"$det" \
+    && grep -qx 600 <<<"$(tail -n1 "$work/gm-cfg.txt" | tr -d ' ')" && ok=1
+  if [ "$strict" = 1 ]; then check "gemini key: config written (tts gemini-3.8-flash-lite-tts), speak fails with Google's auth error" "$ok"; else note "gemini key path ok=$ok"; fi
+  run /bin/bash /opt/hermes-local/bin/hermes-local-voice gemini-key clear >"$work/gm-clr.txt" 2>&1
+  back=$(curl -s -o /dev/null -w '%{http_code}' --max-time 120 -b "$work/cookies" -H "Origin: http://127.0.0.1:9119" \
+    -H 'Content-Type: application/json' -d '{"text":"Back to Edge."}' http://127.0.0.1:9119/api/audio/speak)
+  echo "   after clear: $(tail -n1 "$work/gm-clr.txt" | grep -o '"tts_provider": "[a-z]*"'), speak -> $back"
+  if [ "$strict" = 1 ]; then check "gemini key clear -> Edge TTS speaks again" "$([ "$back" = 200 ] && grep -q '"tts_provider": "edge"' "$work/gm-clr.txt" && echo 1 || echo 0)"; fi
+}
