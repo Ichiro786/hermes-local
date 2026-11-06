@@ -10,6 +10,9 @@ on:
         default: "engine-v0.23.0-1"
       arch:
         default: "arm64"
+      artifact_run:
+        description: "Use the engine-<arch> artifact of this engine.yml run instead of the release (optional)"
+        default: ""
 
 permissions:
   contents: read
@@ -26,7 +29,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils jq libtalloc-dev gawk
       - name: Engine payload
         run: |
-          gh release download "${{ inputs.engine_tag }}" --repo "$GITHUB_REPOSITORY" -D dl -p "rootfs-${{ inputs.arch }}.tar.xz*"
+          if [ -n "${{ inputs.artifact_run }}" ]; then
+            gh run download "${{ inputs.artifact_run }}" --repo "$GITHUB_REPOSITORY" -n "engine-${{ inputs.arch }}" -D dl
+          else
+            gh release download "${{ inputs.engine_tag }}" --repo "$GITHUB_REPOSITORY" -D dl -p "rootfs-${{ inputs.arch }}.tar.xz*"
+          fi
+          ls -l dl
           (cd dl && sha256sum -c "rootfs-${{ inputs.arch }}.tar.xz.sha256")
           sudo mkdir -p "$RUNNER_TEMP/rootfs" && sudo tar -C "$RUNNER_TEMP/rootfs" --numeric-owner -xJf "dl/rootfs-${{ inputs.arch }}.tar.xz"
       - name: Build proot (termux/proot)

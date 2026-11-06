@@ -113,11 +113,17 @@ if [ "$rc" = 0 ]; then
   done
   echo "== plugin install from inside the engine (catalog git plugin, no deps)"
   run /bin/bash -lc 'timeout 300 hermes plugins install quota --enable --yes-deps </dev/null 2>&1 | tail -n 4'
-  check "plugin install quota" "$(run /bin/bash -lc 'hermes plugins list 2>&1' | grep -q quota && echo 1 || echo 0)"
+  for _ in 1 2 3; do # rich wraps to 80 columns without a tty; COLUMNS keeps one row per plugin
+    run /bin/bash -lc 'COLUMNS=200 timeout 120 hermes plugins list </dev/null 2>&1' >"$work/plugins.txt"
+    grep -qE '^│ quota +│ enabled' "$work/plugins.txt" && break; sleep 10
+  done
+  grep -E '^│ (quota|langfuse|antigravity-oauth) ' "$work/plugins.txt" | cut -c1-60; grep -iE 'error|traceback' "$work/plugins.txt" | head -n 5
+  check "plugin install quota (listed enabled)" "$(grep -qE '^│ quota +│ enabled' "$work/plugins.txt" && echo 1 || echo 0)"
   echo "== plugin with python deps (langfuse: pm/uv dependency sync inside the engine)"
-  run /bin/bash -lc 'timeout 600 hermes plugins install langfuse --enable --yes-deps </dev/null 2>&1 | tail -n 6'
-  if run /bin/bash -lc 'cd /opt/hermes/hermes-agent && timeout 120 hermes plugins list 2>&1' | grep -E '^.*langfuse' | grep -qiE 'enabled|on|✓'; then
-    note "plugin with python deps (langfuse) installed + enabled"; else note "plugin with python deps (langfuse) NOT enabled (see log)"; fi
+  run /bin/bash -lc 'timeout 600 hermes plugins install langfuse --enable --yes-deps </dev/null 2>&1 | grep -v "^ *$" | tail -n 25 | cut -c1-300'
+  run /bin/bash -lc 'COLUMNS=200 timeout 120 hermes plugins list </dev/null 2>&1' >"$work/plugins.txt"
+  if grep -qE '^│ langfuse +│ enabled' "$work/plugins.txt"; then
+    note "plugin with python deps (langfuse) installed + enabled"; else note "plugin with python deps (langfuse) NOT enabled: $(grep -E '^│ langfuse ' "$work/plugins.txt" | cut -c1-60)"; fi
   echo "== skills hub search"
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 -b "$work/cookies" "$base/api/skills/hub/search?q=git")
   note "GET /api/skills/hub/search -> $code"
