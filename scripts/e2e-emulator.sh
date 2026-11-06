@@ -10,6 +10,10 @@ APK=$1; OUT=${2:-e2e}
 PKG=dev.syed.hermeslocal
 mkdir -p "$OUT"
 adb wait-for-device
+# Root shell (google_apis image) for reading app files: the CI APK is a release build, so run-as refuses it
+# ("package not debuggable"); appsh falls back to run-as for debuggable builds.
+adb root >/dev/null 2>&1; sleep 3; adb wait-for-device
+appsh() { if [ "$(adb shell id -u | tr -d '\r')" = 0 ]; then adb shell "cd /data/data/$PKG && $1"; else adb shell run-as $PKG sh -c "'$1'"; fi; }
 adb shell settings put global window_animation_scale 1
 adb shell cmd uimode night yes || true   # the AMOLED look Syed approved
 adb install -r -g "$APK" || exit 1
@@ -22,15 +26,16 @@ UI=$(dirname "$0")/ui.py
 P="$OUT/providers"; mkdir -p "$P"
 ci_log() { adb logcat -d -s HermesLocalCI:I 2>/dev/null; }
 # guest '<bash>' [timeout s]: runs a command inside the engine via the CI hook, prints its output.
+# The script travels base64-encoded inside the intent extra (no host-side write into the app's files).
 guest() {
-  local id="g$RANDOM$RANDOM" t=${2:-300}
-  printf '%s\n' "$1" | adb shell run-as $PKG sh -c "'cat > files/r/tmp/$id.sh'"
-  adb shell "am start -n $PKG/.MainActivity -e ci_guest 'echo GUEST_BEGIN_$id; bash /tmp/$id.sh 2>&1; echo GUEST_END_$id'" >/dev/null
+  local id="g$RANDOM$RANDOM" t=${2:-300} b
+  b=$(printf '%s\n' "$1" | base64 -w0)
+  adb shell "am start -n $PKG/.MainActivity -e ci_guest 'echo GUEST_BEGIN_$id; echo $b | base64 -d >/tmp/$id.sh; bash /tmp/$id.sh 2>&1; echo GUEST_END_$id'" >/dev/null
   for _ in $(seq 1 "$t"); do ci_log | grep -q "GUEST_END_$id" && break; sleep 1; done
   ci_log | sed -n "/GUEST_BEGIN_$id/,/GUEST_END_$id/p" | sed 's/^.*guest: //' | grep -v "GUEST_"
 }
-check() { # check <name> <1|0>
-  if [ "$2" = 1 ]; then echo "CHECK ok   $1"; else echo "CHECK FAIL $1"; prov_ok=0; fi | tee -a "$P/checks.txt"; }
+check() { # check <name> <1|0>  (no pipeline around the if: prov_ok must change in this shell)
+  local l; if [ "$2" = 1 ]; then l="CHECK ok   $1"; else l="CHECK FAIL $1"; prov_ok=0; fi; echo "$l" | tee -a "$P/checks.txt"; }
 shot() { adb exec-out screencap -p >"$P/$1.png"; adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb shell cat /sdcard/ui.xml >"$P/$1.xml"; }
 dumpui() { adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb shell cat /sdcard/ui.xml >"$P/cur.xml"; }
 front() { adb shell am start -n $PKG/.MainActivity >/dev/null; sleep 2; } # back from the browser
@@ -67,7 +72,7 @@ providers_e2e() {
   got=0
   while [ $(( ($(date +%s%N) - t) / 1000000 )) -lt 15000 ]; do
     ci_log | grep -q "flow Codex: code " && ci_log | grep -q "flow Codex: url " && { got=1; break; }; sleep 0.3; done
-  dt=$(( ($(date +%s%N) - t) / 1000000 ))ms; echo "codex code+url after ${dt}s (limit 15)" | tee -a "$P/checks.txt"
+  dt=$(( ($(date +%s%N) - t) / 1000000 ))ms; echo "codex code+url after ${dt} (limit 15 s)" | tee -a "$P/checks.txt"
   [ $got = 1 ] || wait_log "flow Codex: code " 60 || true   # late result is still recorded, the check stays failed
   url=$(ci_log | grep -m1 -o "flow Codex: url .*" | awk '{print $4}'); code=$(ci_log | grep -m1 -o "flow Codex: code .*" | awk '{print $4}')
   echo "codex url=$url code=$code" | tee -a "$P/checks.txt"
@@ -93,10 +98,10 @@ providers_e2e() {
   r=$(find_node '^Sign in with Codex$'); echo "codex button after cancel: $r"
   check "Codex Cancel resets (button usable again)" "$(grep -q ' true ' <<<"$r" && echo 1 || echo 0)"
   shot 14-codex-cancelled
-  check "Antigravity still waiting after Codex cancel" "$(find_node 'Paste the code from Google' >/dev/null && echo 1 || echo 0)"
+  check "Antigravity still waiting after Codex cancel" "$(find_node '^Paste the code from Google$' >/dev/null && echo 1 || echo 0)"
 
   echo "== Antigravity: rejected code -> fresh link"
-  tap_node 'Paste the code from Google'; sleep 1
+  tap_node '^Paste the code from Google$'; sleep 1   # the field's placeholder, not the card description
   adb shell input text HLE2EBADCODE123; sleep 1; adb shell input keyevent 111 2>/dev/null; sleep 1
   shot 15-agy-code-typed
   tap_node '^Submit code$'
@@ -143,8 +148,8 @@ adb shell am start -n $PKG/.MainActivity
 sleep 5; adb exec-out screencap -p >"$OUT/01-first-run.png"
 # First-run install (verify + unpack ~1 GB) — wait for the password card.
 for _ in $(seq 1 120); do
-  adb shell run-as $PKG ls files/r/opt/hermes-local/bin/hermes-local-start >/dev/null 2>&1 && \
-    ! adb shell run-as $PKG ls files/r.partial >/dev/null 2>&1 && break
+  appsh "ls files/r/opt/hermes-local/bin/hermes-local-start" >/dev/null 2>&1 && \
+    ! appsh "ls files/r.partial" >/dev/null 2>&1 && break
   sleep 5
 done
 echo "engine installed after $(( $(date +%s) - t0 ))s"
@@ -203,7 +208,7 @@ sleep 12
 adb exec-out screencap -p >"$OUT/05-stopped.png"
 kill -INT $REC 2>/dev/null; sleep 4
 adb pull /sdcard/e2e-stop.mp4 "$OUT/e2e-stop.mp4" || true
-adb shell run-as $PKG cat files/engine/logs/engine.log >"$OUT/engine.log" 2>/dev/null || true
+appsh "cat files/engine/logs/engine.log" >"$OUT/engine.log" 2>/dev/null || true
 adb shell dumpsys gfxinfo $PKG >"$OUT/gfxinfo.txt" 2>/dev/null || true
 kill $LOGCAT $STUB 2>/dev/null
 grep -E "Janky frames|Total frames|90th|99th" "$OUT/gfxinfo.txt" || true
