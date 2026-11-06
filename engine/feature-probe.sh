@@ -42,9 +42,10 @@ c=$(api POST /api/dashboard/agent-plugins/quota/disable); b1=$(body 160); c2=$(a
 c=$(api POST /api/dashboard/agent-plugins/install '{"identifier":"","catalog_name":"quota","enable":true,"force":true}')
 feat plugin-install-api "$([ "$c" = 200 ] && echo works || echo fail)" "POST install quota (force) -> $c $(body 160)"
 # Optional dependency groups (Hermes installs them on demand with uv): MCP SDK and Edge TTS
-for x in mcp edge-tts; do
+for x in mcp edge-tts stt-whisper; do
   out=$(run /bin/bash -lc "timeout 600 hermes pm install --extra $x </dev/null 2>&1 | grep -v '^ *$' | tail -n 4" | tr '\n' ' ')
-  run /bin/bash -lc "/opt/hermes-local/bin/hermes-py -c 'import ${x//-/_}' 2>/dev/null" && feat "extra-$x" works "hermes pm install --extra $x: $out" || feat "extra-$x" fail "$out"
+  mod=${x//-/_}; [ "$x" = stt-whisper ] && mod=faster_whisper
+  run /bin/bash -lc "/opt/hermes-local/bin/hermes-py -c 'import $mod' 2>/dev/null" && feat "extra-$x" works "hermes pm install --extra $x: $out" || feat "extra-$x" fail "$out"
 done
 
 # MCP: a stdio server on Hermes' own python (mcp SDK ships with Hermes) + the node runtime for npx servers

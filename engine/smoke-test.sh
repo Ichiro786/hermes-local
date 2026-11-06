@@ -41,7 +41,8 @@ python3 "$STUB_LLM" $STUB_PORT >"$work/stub.log" 2>&1 &
 stub=$!
 # The stub sign-in below routes Codex to the stub (Hermes reads HERMES_CODEX_BASE_URL from ~/.hermes/.env).
 mkdir -p "$M/root/.hermes"; echo "HERMES_CODEX_BASE_URL=http://127.0.0.1:$STUB_PORT/v1" >>"$M/root/.hermes/.env"
-envs=(HOME=/root PATH=/opt/hermes-local/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TERM=dumb)
+# Same guest variables the app sets (ProotCommand.guestEnv); pm needs HERMES_RUNTIME_DIR to find its tools.
+envs=(HOME=/root PATH=/opt/hermes-local/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TERM=dumb HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools)
 log="$work/engine.log"
 
 if [ "$MODE" = chroot ]; then
