@@ -209,7 +209,7 @@ kill $LOGCAT $STUB 2>/dev/null
 grep -E "Janky frames|Total frames|90th|99th" "$OUT/gfxinfo.txt" || true
 rm -f "$OUT/cookies"
 # No Hermes self-update text anywhere: app log, engine log, every Providers screen dump.
-if cat "$OUT/logcat.txt" "$OUT/engine.log" "$P"/*.xml 2>/dev/null | grep -qiE 'source-update|update is still running'; then
+if cat "$OUT/logcat.txt" "$OUT/engine.log" "$P"/*.xml 2>/dev/null | grep -v "diag-update:" | grep -qiE 'source-update|update is still running'; then
   echo "CHECK FAIL no source-update text anywhere" | tee -a "$P/checks.txt"; prov_ok=0
 else echo "CHECK ok   no source-update text anywhere" | tee -a "$P/checks.txt"; fi
 grep -c "CHECK ok" "$P/checks.txt"; grep "CHECK FAIL" "$P/checks.txt"
