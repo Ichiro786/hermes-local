@@ -6,7 +6,8 @@
 # itself, the main dashboard endpoints the Hermes apps use answer, a plugin installs from inside the
 # engine, and a chat turn streams through /api/ws once a (stub) Codex sign-in exists.
 # Env: STUB_LLM=<path to scripts/stub-llm.py> (default: next to this repo), CAPTURE_DIR=<dir> for the
-# raw sign-in captures (codex device code, agy URL), SMOKE_NET_CHECKS=0 to skip the live sign-in captures.
+# raw sign-in captures (codex device code, agy URL), SMOKE_NET_CHECKS=0 to skip the live sign-in captures,
+# FEATURES=1 for the feature probe (engine/feature-probe.sh; informational, never fails the smoke).
 set -uo pipefail
 ROOTFS=$(realpath "${1:?rootfs dir}")
 MODE=${2:-chroot}
@@ -57,6 +58,9 @@ elif [ "$MODE" = proot ]; then
 else
   echo "mode must be chroot or proot" >&2; exit 2
 fi
+
+# FEATURES=1: also run the feature probe (engine/feature-probe.sh), with the gateway's API server on.
+if [ "${FEATURES:-0}" = 1 ]; then mkdir -p "$M/root/.hermes-local"; echo HL_API_SERVER=1 >"$M/root/.hermes-local/settings.env"; fi
 
 echo "== set password"
 echo "$PW" | run /bin/bash /opt/hermes-local/bin/hermes-local-passwd admin || { echo "SMOKE ($MODE): passwd failed"; exit 1; }
@@ -136,6 +140,8 @@ if [ "$rc" = 0 ]; then
   check "streaming chat turn through /api/ws (stub Codex)" "$(grep -q '^CHAT_OK' "$work/chat-after.txt" && echo 1 || echo 0)"
   echo "== stub requests:"; tail -n 8 "$work/stub.log"
   check "no source-update message after sign-in + chat" "$(grep -qiE 'source-update|update is still running' "$log" && echo 0 || echo 1)"
+  # shellcheck source=feature-probe.sh
+  [ "${FEATURES:-0}" = 1 ] && . "$(dirname "$(realpath "$0")")/feature-probe.sh"
 
   if [ "${SMOKE_NET_CHECKS:-1}" = 1 ]; then
     echo "== live Codex device-code start (real auth.openai.com, cancelled after the code)"

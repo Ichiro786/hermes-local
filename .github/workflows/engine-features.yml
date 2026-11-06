@@ -1,0 +1,45 @@
+name: Engine feature probe
+
+# Runs a published engine payload under termux/proot (the phone's proot) on a native arm64 runner and
+# probes the Hermes features the mobile app uses (engine/feature-probe.sh via smoke-test.sh FEATURES=1).
+
+on:
+  workflow_dispatch:
+    inputs:
+      engine_tag:
+        default: "engine-v0.23.0-1"
+      arch:
+        default: "arm64"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils jq libtalloc-dev gawk
+      - name: Engine payload
+        run: |
+          gh release download "${{ inputs.engine_tag }}" --repo "$GITHUB_REPOSITORY" -D dl -p "rootfs-${{ inputs.arch }}.tar.xz*"
+          (cd dl && sha256sum -c "rootfs-${{ inputs.arch }}.tar.xz.sha256")
+          sudo mkdir -p "$RUNNER_TEMP/rootfs" && sudo tar -C "$RUNNER_TEMP/rootfs" --numeric-owner -xJf "dl/rootfs-${{ inputs.arch }}.tar.xz"
+      - name: Build proot (termux/proot)
+        run: |
+          git clone -q --depth 1 https://github.com/termux/proot "$RUNNER_TEMP/proot-src"
+          make -s -C "$RUNNER_TEMP/proot-src/src" -j"$(nproc)" HAS_LOADER_32BIT= proot
+      - name: Feature probe (proot)
+        run: |
+          mkdir -p out
+          sudo FEATURES=1 SMOKE_NET_CHECKS=0 PROOT="$RUNNER_TEMP/proot-src/src/proot" SMOKE_TIMEOUT=420 \
+            bash engine/smoke-test.sh "$RUNNER_TEMP/rootfs" proot 2>&1 | tee out/probe.log || true
+          grep -E "^(FEATURE|CHECK)|SMOKE TEST" out/probe.log | tee out/features.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: features-${{ inputs.arch }}
+          path: out/
