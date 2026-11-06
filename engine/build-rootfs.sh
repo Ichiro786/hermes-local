@@ -166,6 +166,15 @@ new = ("audio = base64.b64decode(audio_b64)  # hermes-local: 3.8 TTS models alre
 assert s.count(old) == 1, "Gemini TTS return line not found"
 p.write_text(s.replace(old, new)); print("patched Gemini TTS WAV passthrough")
 PY
+# speak-stream (the apps' streamed replies) decodes Edge's MP3 with `ffmpeg` from PATH; Hermes' own ffmpeg
+# lives under its runtime dir, so v1.0.0-test2 answered every speak-stream with "fallback".
+ff=$(cd "$ROOTFS" && ls -d opt/hermes/tools/ffmpeg-*/bin/ffmpeg 2>/dev/null | head -n1)
+if [ -n "$ff" ]; then
+  for b in ffmpeg ffprobe; do [ -e "$ROOTFS/${ff%/ffmpeg}/$b" ] && ln -sfn "/${ff%/ffmpeg}/$b" "$ROOTFS/usr/local/bin/$b"; done
+else
+  echo "::warning::no Hermes-managed ffmpeg; installing Ubuntu's"; in_root "apt-get install -y --no-install-recommends ffmpeg"
+fi
+in_root "command -v ffmpeg && ffmpeg -hide_banner -version | head -n1"
 printf '%s\n' "$WHISPER_MODEL" >"$ROOTFS/opt/hermes-local/whisper-model"
 size_after=$(du -sb "$ROOTFS" | cut -f1)
 echo "voice size: python deps +$(( (size_deps - size_before) / 1048576 )) MiB, whisper $WHISPER_MODEL model +$(( (size_after - size_deps) / 1048576 )) MiB (installed)"
