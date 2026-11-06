@@ -150,6 +150,11 @@ if [ "$rc" = 0 ]; then
   check "streaming chat turn through /api/ws (stub Codex)" "$(grep -q '^CHAT_OK' "$work/chat-after.txt" && echo 1 || echo 0)"
   echo "== stub requests:"; tail -n 8 "$work/stub.log"
   check "no source-update message after sign-in + chat" "$(grep -qiE 'source-update|update is still running' "$log" && echo 0 || echo 1)"
+  # Voice (Live Mode): STT/TTS/speak-stream must work out of the box (no extras, no restart).
+  # shellcheck source=voice-probe.sh
+  . "$(dirname "$(realpath "$0")")/voice-probe.sh"
+  voice_probe initial "${VOICE_STRICT:-1}"
+  voice_gptlive_probe "${VOICE_STRICT:-1}"
   # shellcheck source=feature-probe.sh
   [ "${FEATURES:-0}" = 1 ] && . "$(dirname "$(realpath "$0")")/feature-probe.sh"
 

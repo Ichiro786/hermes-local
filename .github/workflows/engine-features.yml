@@ -13,6 +13,9 @@ on:
       artifact_run:
         description: "Use the engine-<arch> artifact of this engine.yml run instead of the release (optional)"
         default: ""
+      voice_bench:
+        description: "Benchmark Whisper tiny/base/small on the runner CPU (1/0)"
+        default: "1"
 
 permissions:
   contents: read
@@ -44,9 +47,9 @@ jobs:
       - name: Feature probe (proot)
         run: |
           mkdir -p out
-          sudo FEATURES=1 SMOKE_NET_CHECKS=0 PROOT="$RUNNER_TEMP/proot-src/src/proot" SMOKE_TIMEOUT=420 \
+          sudo FEATURES=1 VOICE_BENCH="${{ inputs.voice_bench }}" CAPTURE_DIR="$PWD/out/captures" SMOKE_NET_CHECKS=0 PROOT="$RUNNER_TEMP/proot-src/src/proot" SMOKE_TIMEOUT=420 \
             bash engine/smoke-test.sh "$RUNNER_TEMP/rootfs" proot 2>&1 | tee out/probe.log || true
-          grep -E "^(FEATURE|CHECK)|SMOKE TEST" out/probe.log | tee out/features.txt
+          grep -E "^(FEATURE|CHECK)|^\[[a-z-]+\] VOICE|^BENCH|SMOKE TEST" out/probe.log | tee out/features.txt
       - uses: actions/upload-artifact@v4
         with:
           name: features-${{ inputs.arch }}

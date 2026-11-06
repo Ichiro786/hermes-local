@@ -59,6 +59,9 @@ grep -E 'HERMES_LOCAL_(READY|FAILED)' "$work/engine2.log"
 curl -s -o /dev/null -c "$work/cookies" -H 'Content-Type: application/json' \
   -d "{\"provider\":\"basic\",\"username\":\"admin\",\"password\":\"$PW\"}" "$base/auth/password-login"
 
+voice_probe after-extras 0
+[ "${VOICE_BENCH:-0}" = 1 ] && voice_bench
+
 # MCP: a stdio server on Hermes' own python (mcp SDK = the "mcp" extra above) + the node runtime for npx servers
 cat >"$work/mcp_probe.py" <<'PY'
 import sys

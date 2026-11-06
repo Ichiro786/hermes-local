@@ -1,0 +1,12 @@
+#!/bin/bash
+# Hermes Local: voice settings (the app's Providers screen and hermes-local-start).
+#   hermes-local-voice status              one JSON line: STT/TTS providers, OpenAI key saved?, GPT-Live ready?
+#   hermes-local-voice defaults [--force]  local Whisper STT (auto language) + Edge TTS, once per HERMES_HOME
+#   hermes-local-voice openai-key set      key on stdin -> VOICE_TOOLS_OPENAI_KEY in ~/.hermes/.env (0600)
+#   hermes-local-voice openai-key clear
+set -u
+export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools PYTHONUNBUFFERED=1
+export PATH=/opt/hermes-local/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HF_HUB_CACHE=/opt/hermes-local/hf-hub HF_HUB_DISABLE_TELEMETRY=1
+umask 077
+exec /bin/bash /opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_voice.py "$@"
