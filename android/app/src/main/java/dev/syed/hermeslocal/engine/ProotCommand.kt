@@ -84,6 +84,10 @@ object ProotCommand {
         env["PATH"] = "/system/bin:/system/xbin"
         env["PROOT_TMP_DIR"] = paths.prootTmp.absolutePath
         env["PROOT_LOADER"] = paths.loader.absolutePath
+        // link2symlink keeps its backing files in one directory, so renaming a directory that holds
+        // emulated hard links (uv moves unpacked wheels into its cache) does not break them.
+        // Without it plugin/extra installs fail with "failed to hardlink file ... .l2s.*".
+        env["PROOT_L2S_DIR"] = File(paths.rootfs, ".l2s").apply { mkdirs() }.absolutePath
         env["LD_LIBRARY_PATH"] = paths.nativeLibDir.absolutePath
         return pb
     }

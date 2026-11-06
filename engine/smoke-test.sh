@@ -53,6 +53,9 @@ elif [ "$MODE" = proot ]; then
   help=$("$PROOT" --help 2>&1 || true)
   grep -q -- '--kill-on-exit' <<<"$help" && extra+=(--kill-on-exit)
   grep -q -- '--link2symlink' <<<"$help" && extra+=(--link2symlink)
+  # Same as the app: link2symlink keeps its backing files in one directory, so renaming a directory
+  # that holds "hard links" (uv moves freshly unpacked wheels into its cache) does not break them.
+  export PROOT_L2S_DIR="$M/.l2s"; mkdir -p "$PROOT_L2S_DIR"
   run() { "$PROOT" "${extra[@]}" -0 -r "$M" -w /root -b /dev -b /proc -b /sys -b "$M/tmp:/dev/shm" \
     /usr/bin/env -i "${envs[@]}" "$@"; }
 else

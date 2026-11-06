@@ -37,11 +37,15 @@ c=$(api PUT /api/skills/toggle "{\"name\":\"$sk\",\"enabled\":false}"); c2=$(api
 [ "$c$c2" = 200200 ] && feat skills-toggle works "$sk off/on" || feat skills-toggle fail "$c $c2 $(body)"
 
 # Plugins through the dashboard API (the app's Plugins screen): disable / enable an installed one
-pl=$(run /bin/bash -lc 'hermes plugins list 2>/dev/null' | grep -oE 'antigravity-oauth' | head -n1)
-c=$(api POST "/api/dashboard/agent-plugins/${pl:-antigravity-oauth}/disable"); c2=$(api POST "/api/dashboard/agent-plugins/${pl:-antigravity-oauth}/enable")
-[ "$c$c2" = 200200 ] && feat plugin-enable-disable works "antigravity-oauth disable/enable via API" || feat plugin-enable-disable fail "$c $c2 $(body)"
-c=$(api POST /api/dashboard/agent-plugins/install '{"identifier":"","catalog_name":"quota","enable":true}')
-feat plugin-install-api "$([ "$c" = 200 ] && echo works || echo fail)" "POST install quota -> $c $(body 160)"
+c=$(api POST /api/dashboard/agent-plugins/quota/disable); b1=$(body 160); c2=$(api POST /api/dashboard/agent-plugins/quota/enable); b2=$(body 160)
+[ "$c$c2" = 200200 ] && feat plugin-enable-disable works "quota disable/enable via API" || feat plugin-enable-disable fail "disable $c $b1 / enable $c2 $b2"
+c=$(api POST /api/dashboard/agent-plugins/install '{"identifier":"","catalog_name":"quota","enable":true,"force":true}')
+feat plugin-install-api "$([ "$c" = 200 ] && echo works || echo fail)" "POST install quota (force) -> $c $(body 160)"
+# Optional dependency groups (Hermes installs them on demand with uv): MCP SDK and Edge TTS
+for x in mcp edge-tts; do
+  out=$(run /bin/bash -lc "timeout 600 hermes pm install --extra $x </dev/null 2>&1 | grep -v '^ *$' | tail -n 4" | tr '\n' ' ')
+  run /bin/bash -lc "/opt/hermes-local/bin/hermes-py -c 'import ${x//-/_}' 2>/dev/null" && feat "extra-$x" works "hermes pm install --extra $x: $out" || feat "extra-$x" fail "$out"
+done
 
 # MCP: a stdio server on Hermes' own python (mcp SDK ships with Hermes) + the node runtime for npx servers
 cat >"$work/mcp_probe.py" <<'PY'
@@ -58,7 +62,7 @@ c=$(api POST /api/mcp/servers '{"name":"hlprobe","command":"/opt/hermes-local/bi
 c2=$(api POST /api/mcp/servers/hlprobe/test)
 grep -q echo "$work/f.json" && feat mcp-stdio works "add $c, test $c2: $(body 160)" || feat mcp-stdio fail "add $c, test $c2: $(body 200)"
 node=$(run /bin/bash -lc 'ls -d /opt/hermes/tools/node-*/bin 2>/dev/null | head -n1')
-feat node-runtime info "$( [ -n "$node" ] && run /bin/bash -lc "$node/node --version; $node/npx --version" | tr '\n' ' ' || echo 'no pm node')"
+feat node-runtime info "node $(run /bin/bash -lc "$node/node --version" 2>/dev/null), npm dir: $(run /bin/bash -lc 'ls -d /opt/hermes/tools/npm-*/bin 2>/dev/null')"
 
 # Files: managed upload + listing
 c=$(api POST /api/files/upload "{\"path\":\"/root/hl-probe.txt\",\"data_url\":\"data:text/plain;base64,$(printf 'hello from hermes local' | base64)\"}")
@@ -68,7 +72,7 @@ c2=$(api GET "/api/files?path=/root"); grep -q hl-probe.txt "$work/f.json" && fe
 api GET /api/audio/voice-config >/dev/null; feat voice-config info "$(body 300)"
 c=$(api POST /api/audio/speak '{"text":"Hello from Hermes Local."}')
 grep -q '"data:audio' "$work/f.json" && feat tts works "/api/audio/speak $c audio data url" || feat tts fail "$c $(body 200)"
-ff=$(run /bin/bash -lc 'ls -d /opt/hermes/tools/ffmpeg-*/ 2>/dev/null | head -n1')
+ff=$(run /bin/bash -lc 'ls -d /opt/hermes/tools/ffmpeg-*/bin/ 2>/dev/null | head -n1')
 run /bin/bash -lc "${ff}ffmpeg -loglevel error -y -f lavfi -i sine=frequency=440:duration=1 -ar 16000 -ac 1 /tmp/probe.wav" 2>/dev/null
 if [ -s "$M/tmp/probe.wav" ]; then
   c=$(api POST /api/audio/transcribe "{\"data_url\":\"data:audio/wav;base64,$(base64 -w0 "$M/tmp/probe.wav")\",\"mime_type\":\"audio/wav\"}")
@@ -82,7 +86,7 @@ jid=$(jq -r '.id // .job.id // empty' "$work/f.json" 2>/dev/null)
 if [ -n "$jid" ]; then
   api POST "/api/cron/jobs/$jid/trigger" >/dev/null
   for _ in $(seq 1 50); do api GET "/api/cron/jobs/$jid/runs" >/dev/null; [ "$(jq -r '(.runs // .) | length' "$work/f.json" 2>/dev/null)" -ge 1 ] 2>/dev/null && break; sleep 3; done
-  r=$(jq -c '(.runs // .)[0] | {status, ok, output: ((.output // .stdout // "") | tostring | .[0:80])}' "$work/f.json" 2>/dev/null)
+  r=$(jq -c '(.runs // .)[0]' "$work/f.json" 2>/dev/null | cut -c1-300)
   [ -n "$r" ] && [ "$r" != null ] && feat cron works "job $jid run: $r" || feat cron fail "job $jid no run in 150 s: $(body 200)"
 else feat cron fail "create $c $(body 200)"; fi
 
