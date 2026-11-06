@@ -81,6 +81,13 @@ providers_e2e() {
   sleep 3; echo "after code: $(resumed)" | tee -a "$P/checks.txt"   # the app opens the browser itself
   shot 11-codex-browser; front; top; shot 12-codex-code
   check "Codex code + URL on screen" "$(grep -q "text=\"$code\"" "$P/12-codex-code.xml" && grep -q 'auth.openai.com/codex/device' "$P/12-codex-code.xml" && echo 1 || echo 0)"
+  # test2 cosmetic bug: the log under the flow showed "2. Enter this code:" with the code line missing.
+  check "flow log shows the URL and the code under their steps" "$(python3 -c '
+import sys, xml.etree.ElementTree as ET
+code = sys.argv[2]
+texts = [n.get("text") or "" for n in ET.parse(sys.argv[1]).getroot().iter("node")]
+ok = any("Open this URL" in t and "https://auth.openai.com/codex/device" in t and ("Enter this code:\n   " + code) in t for t in texts)
+print(1 if ok else 0)' "$P/12-codex-code.xml" "$code" 2>/dev/null || echo 0)"
 
   echo "== Antigravity while Codex is waiting (independent flows)"
   r=$(find_node '^Sign in with Antigravity$'); echo "agy button: $r"
@@ -98,6 +105,7 @@ providers_e2e() {
   r=$(find_node '^Sign in with Codex$'); echo "codex button after cancel: $r"
   check "Codex Cancel resets (button usable again)" "$(grep -q ' true ' <<<"$r" && echo 1 || echo 0)"
   shot 14-codex-cancelled
+  check "no lingering 'Sign-in cancelled.' card after Cancel" "$(grep -q 'Sign-in cancelled' "$P/14-codex-cancelled.xml" && echo 0 || echo 1)"
   check "Antigravity still waiting after Codex cancel" "$(find_node '^Paste the code from Google$' >/dev/null && echo 1 || echo 0)"
 
   echo "== Antigravity: rejected code -> fresh link"
@@ -140,6 +148,25 @@ G
   guest "$CHATPY" 240 | grep -E "CHAT_|MODEL_INFO|delta" | cut -c1-300 | tee "$P/chat-after.txt"
   check "chat via /api/ws streams the stub reply" "$(grep -q '^CHAT_OK.*stub model' "$P/chat-after.txt" && echo 1 || echo 0)"
   check "no 'not connected' error after Use for chat" "$(grep -q 'not connected' "$P/chat-after.txt" && echo 0 || echo 1)"
+
+  echo "== OpenAI API key (for GPT-Live) card"
+  r=$(find_node '^Live Mode hears with '); echo "voice line: $r" | tee -a "$P/checks.txt"
+  check "voice defaults: Live Mode hears with local Whisper (automatic language), speaks with Edge" "$(grep -qE 'Whisper [a-z0-9.-]+ on this phone, automatic language . speaks with Edge' <<<"$r" && echo 1 || echo 0)"
+  tap_node '^OpenAI API key \(sk-'; sleep 1
+  adb shell input text sk-hle2e-fake-key-0123456789abcd; sleep 1
+  adb shell dumpsys input_method | grep -qE "mInputShown=true|mIsInputViewShown=true|isInputViewShown=true" && adb shell input keyevent 4; sleep 1
+  tap_node '^Save key$'
+  saved=0; for _ in $(seq 1 60); do find_node '^Saved …abcd · GPT-Live ready$' >/dev/null && { saved=1; break; }; sleep 2; done
+  shot 19-openai-key-saved
+  check "OpenAI key saved -> 'Saved …abcd · GPT-Live ready'" "$saved"
+  guest 'stat -c "%a %n" /root/.hermes/.env; grep -c "^VOICE_TOOLS_OPENAI_KEY=" /root/.hermes/.env' 60 | tee "$P/openai-key-env.txt"
+  check "key in ~/.hermes/.env (0600) as VOICE_TOOLS_OPENAI_KEY" "$(grep -q '^600 ' "$P/openai-key-env.txt" && grep -qx 1 "$P/openai-key-env.txt" && echo 1 || echo 0)"
+  check "key not shown on screen" "$(grep -q 'sk-hle2e' "$P/19-openai-key-saved.xml" && echo 0 || echo 1)"
+  tap_node '^Remove$' --after '^OpenAI API key \(for GPT-Live\)$'; sleep 2
+  tap_node '^Remove$' --after '^Remove the OpenAI key\?$'
+  gone=0; for _ in $(seq 1 60); do find_node '^Not set$' >/dev/null && { gone=1; break; }; sleep 2; done
+  shot 20-openai-key-removed
+  check "Remove clears the key ('Not set')" "$gone"
   rec_stop
   ci_log >"$P/ci-log.txt"
   [ "$prov_ok" = 1 ]

@@ -13,7 +13,8 @@
 #   /root/.hermes              HERMES_HOME: config, auth, plugins, sessions (user data; kept on update)
 #
 # Env: OUT_DIR, WORK_DIR, HERMES_REF (tag, default v0.23.0), HERMES_COMMIT (sha of that tag),
-#      ENGINE_REVISION, GIT_SHA, XZ_LEVEL (default 7: multithreaded within memory), WITH_AGY (default 1)
+#      ENGINE_REVISION, GIT_SHA, XZ_LEVEL (default 7: multithreaded within memory), WITH_AGY (default 1),
+#      WHISPER_MODEL (default small)
 set -euo pipefail
 export LC_ALL=C DEBIAN_FRONTEND=noninteractive
 
@@ -25,6 +26,7 @@ HERMES_REF="${HERMES_REF:-v0.23.0}"
 HERMES_COMMIT="${HERMES_COMMIT:-}"
 XZ_LEVEL="${XZ_LEVEL:-7}"
 WITH_AGY="${WITH_AGY:-1}"
+WHISPER_MODEL="${WHISPER_MODEL:-small}"  # faster-whisper model preinstalled for Live Mode (tiny|base|small)
 UBUNTU_BASE_DIR="${UBUNTU_BASE_DIR:-https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release}"
 
 fail() { echo "build-rootfs: $*" >&2; exit 1; }
@@ -129,6 +131,35 @@ in_root "hermes plugins install antigravity-oauth --enable --yes-deps </dev/null
 in_root "hermes plugins list 2>&1 | tail -n 20" || true
 endstep
 
+step "Voice: faster-whisper + Whisper $WHISPER_MODEL + Edge TTS (Live Mode works without an on-demand install)"
+# Without these, Hermes v0.23.0 has no STT provider: /api/audio/transcribe answers 400 "No STT provider
+# available" (the Hermes Android app's Live Mode: "That didn't come through: HTTP 400"), and the extras
+# would only load after an engine restart.
+size_before=$(du -sb "$ROOTFS" | cut -f1)
+in_root "hermes pm install --extra stt-whisper </dev/null 2>&1 | grep -v '^ *$' | tail -n 4"
+in_root "hermes pm install --extra edge-tts </dev/null 2>&1 | grep -v '^ *$' | tail -n 4"
+rm -rf "$ROOTFS/root/.cache"
+size_deps=$(du -sb "$ROOTFS" | cut -f1)
+install -d -m 0755 "$ROOTFS/opt/hermes-local/hf-hub"
+install -m 0644 "$SCRIPT_DIR/testdata/jfk.wav" "$ROOTFS/tmp/jfk.wav"
+# Download the model into the engine's own HF cache (hermes-local-start points HF_HUB_CACHE there) and
+# transcribe a real sample with automatic language detection, the way Hermes' local provider loads it.
+in_root "HF_HUB_CACHE=/opt/hermes-local/hf-hub HF_HUB_DISABLE_TELEMETRY=1 /bin/bash /opt/hermes-local/bin/hermes-py -c '
+import time, hermes_bootstrap
+from faster_whisper import WhisperModel
+t = time.monotonic(); m = WhisperModel(\"$WHISPER_MODEL\", device=\"cpu\", compute_type=\"int8\"); load = time.monotonic() - t
+t = time.monotonic(); segs, info = m.transcribe(\"/tmp/jfk.wav\", vad_filter=True); text = \" \".join(s.text.strip() for s in segs)
+print(\"whisper $WHISPER_MODEL: load %.1fs, transcribe %.1fs of %.1fs audio, language %s: %s\" % (load, time.monotonic() - t, info.duration, info.language, text))
+assert \"country\" in text.lower(), text
+import edge_tts; print(\"edge-tts\", edge_tts.__version__)
+'"
+rm -f "$ROOTFS/tmp/jfk.wav"; rm -rf "$ROOTFS/root/.cache"
+printf '%s\n' "$WHISPER_MODEL" >"$ROOTFS/opt/hermes-local/whisper-model"
+size_after=$(du -sb "$ROOTFS" | cut -f1)
+echo "voice size: python deps +$(( (size_deps - size_before) / 1048576 )) MiB, whisper $WHISPER_MODEL model +$(( (size_after - size_deps) / 1048576 )) MiB (installed)"
+du -sh "$ROOTFS/opt/hermes-local/hf-hub" || true
+endstep
+
 if [ "$WITH_AGY" = 1 ]; then
   step "Google agy CLI"
   fetch -o "$ROOTFS/tmp/agy-install.sh" https://antigravity.google/cli/install.sh
@@ -217,6 +248,7 @@ hermes_ref=$HERMES_REF
 hermes_commit=${HERMES_COMMIT:-}
 hermes_version=$hermes_version
 agy=$agy_version
+whisper=$WHISPER_MODEL
 ubuntu_base=$base_version
 arch=$ARCH
 built=$(date -u +%Y-%m-%dT%H:%M:%SZ)

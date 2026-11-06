@@ -40,6 +40,8 @@ data class SignInFlow(
     val lines: List<String> = emptyList(),
     /** The URL already opened in the browser (opened once, after the code is on screen). */
     val opened: String? = null,
+    /** Which start() this flow belongs to: a cancelled flow's process exiting later must not touch a newer flow. */
+    val gen: Long = 0,
 ) {
     val running get() = phase == FlowPhase.Starting || phase == FlowPhase.Waiting || phase == FlowPhase.Verifying
 }
@@ -103,8 +105,10 @@ object ProviderFlows {
     private val jobs = HashMap<ProviderId, Job>()
     private var refreshJob: Job? = null
 
-    private fun set(p: ProviderId, f: (SignInFlow) -> SignInFlow) =
-        _flows.update { m -> m[p]?.let { m + (p to f(it)) } ?: m }
+    private var nextGen = 0L
+
+    private fun set(p: ProviderId, gen: Long? = null, f: (SignInFlow) -> SignInFlow) =
+        _flows.update { m -> m[p]?.takeIf { gen == null || it.gen == gen }?.let { m + (p to f(it)) } ?: m }
 
     private fun ci(msg: String) {
         if (BuildConfig.CI_HOOKS) Log.i(TAG, msg)
@@ -121,29 +125,30 @@ object ProviderFlows {
 
     fun start(p: ProviderId) {
         if (_flows.value[p]?.running == true) return
-        _flows.update { it + (p to SignInFlow(p)) }
+        val gen = ++nextGen
+        _flows.update { it + (p to SignInFlow(p, gen = gen)) }
         ci("flow $p: start")
         jobs[p]?.cancel()
         jobs[p] = AppController.scope.launch(Dispatchers.IO) {
             val parser = SignInParser()
             val session = try {
-                AppController.runner.startSession(AUTH + listOf("login", p.id)) { raw -> onLine(p, parser, raw) }
+                AppController.runner.startSession(AUTH + listOf("login", p.id)) { raw -> onLine(p, gen, parser, raw) }
             } catch (e: Exception) {
-                finish(p, FlowPhase.Failed, e.message ?: "could not start the engine")
+                finish(p, gen, FlowPhase.Failed, e.message ?: "could not start the engine")
                 return@launch
             }
             synchronized(sessions) { sessions[p] = session }
             val watchdog = launch {
                 delay(START_TIMEOUT_MS)
                 val f = _flows.value[p]
-                if (f != null && f.running && f.url == null) {
-                    finish(p, FlowPhase.Failed, "No sign-in link after ${START_TIMEOUT_MS / 1000} s. Check the connection and try again.")
+                if (f != null && f.gen == gen && f.running && f.url == null) {
+                    finish(p, gen, FlowPhase.Failed, "No sign-in link after ${START_TIMEOUT_MS / 1000} s. Check the connection and try again.")
                     session.cancel()
                     return@launch
                 }
                 delay(totalTimeoutMs(p) - START_TIMEOUT_MS)
                 if (_flows.value[p]?.running == true) {
-                    finish(p, FlowPhase.Failed, "Sign-in timed out. Try again.")
+                    finish(p, gen, FlowPhase.Failed, "Sign-in timed out. Try again.")
                     session.cancel()
                 }
             }
@@ -151,35 +156,37 @@ object ProviderFlows {
             watchdog.cancel()
             synchronized(sessions) { if (sessions[p] === session) sessions.remove(p) }
             val f = _flows.value[p]
-            if (f != null && f.running) {
-                if (exit == 0) finish(p, FlowPhase.Done, f.detail)
-                else finish(p, FlowPhase.Failed, f.error ?: f.lines.lastOrNull() ?: "Sign-in did not finish (exit $exit).")
+            if (f != null && f.gen == gen && f.running) {
+                if (exit == 0) finish(p, gen, FlowPhase.Done, f.detail)
+                else finish(p, gen, FlowPhase.Failed, f.error ?: f.lines.lastOrNull() ?: "Sign-in did not finish (exit $exit).")
             }
             ci("flow $p: exit $exit phase=${_flows.value[p]?.phase}")
             withContext(Dispatchers.Main) { refresh() }
         }
     }
 
-    private fun onLine(p: ProviderId, parser: SignInParser, raw: String) {
+    private fun onLine(p: ProviderId, gen: Long, parser: SignInParser, raw: String) {
         val ev = parser.feed(raw) ?: return
+        // The URL and code also go into the log under "1. Open this URL / 2. Enter this code:".
+        fun log(text: String) = set(p, gen) { it.copy(lines = (it.lines + text).takeLast(40)) }
         when (ev) {
-            is SignInParser.Event.Url -> { set(p) { it.copy(url = ev.url, phase = FlowPhase.Waiting, error = null) }; ci("flow $p: url ${ev.url}") }
-            is SignInParser.Event.Code -> { set(p) { it.copy(code = ev.code, phase = FlowPhase.Waiting) }; ci("flow $p: code ${ev.code}") }
-            SignInParser.Event.Prompt -> { set(p) { it.copy(wantsCode = true, phase = FlowPhase.Waiting) }; ci("flow $p: prompt code") }
-            is SignInParser.Event.Error -> { set(p) { it.copy(error = ev.message, phase = FlowPhase.Waiting, url = null, wantsCode = false) }; ci("flow $p: error ${ev.message}") }
+            is SignInParser.Event.Url -> { set(p, gen) { it.copy(url = ev.url, phase = FlowPhase.Waiting, error = null) }; log("   ${ev.url}"); ci("flow $p: url ${ev.url}") }
+            is SignInParser.Event.Code -> { set(p, gen) { it.copy(code = ev.code, phase = FlowPhase.Waiting) }; log("   ${ev.code}"); ci("flow $p: code ${ev.code}") }
+            SignInParser.Event.Prompt -> { set(p, gen) { it.copy(wantsCode = true, phase = FlowPhase.Waiting) }; ci("flow $p: prompt code") }
+            is SignInParser.Event.Error -> { set(p, gen) { it.copy(error = ev.message, phase = FlowPhase.Waiting, url = null, wantsCode = false) }; ci("flow $p: error ${ev.message}") }
             is SignInParser.Event.Done -> {
-                if (ev.ok) set(p) { it.copy(phase = FlowPhase.Verifying, detail = ev.detail) }
-                else set(p) { it.copy(error = ev.detail.ifBlank { "Sign-in failed." }) }
+                if (ev.ok) set(p, gen) { it.copy(phase = FlowPhase.Verifying, detail = ev.detail) }
+                else set(p, gen) { it.copy(error = ev.detail.ifBlank { "Sign-in failed." }) }
                 ci("flow $p: done ok=${ev.ok} ${ev.detail}")
             }
             is SignInParser.Event.Model -> ci("flow $p: model ${ev.json}")
-            is SignInParser.Event.State -> set(p) { it.copy(lines = (it.lines + ev.text).takeLast(40)) }
-            is SignInParser.Event.Line -> set(p) { it.copy(lines = (it.lines + ev.text).takeLast(40)) }
+            is SignInParser.Event.State -> log(ev.text)
+            is SignInParser.Event.Line -> log(ev.text)
         }
     }
 
-    private fun finish(p: ProviderId, phase: FlowPhase, message: String?) {
-        set(p) {
+    private fun finish(p: ProviderId, gen: Long?, phase: FlowPhase, message: String?) {
+        set(p, gen) {
             if (!it.running) it
             else it.copy(phase = phase, wantsCode = false,
                 error = if (phase == FlowPhase.Failed) message else null,
@@ -187,8 +194,9 @@ object ProviderFlows {
         }
     }
 
+    /** Cancel ends the flow and removes its panel at once (test2 left a "Sign-in cancelled." card until Close). */
     fun cancel(p: ProviderId) {
-        finish(p, FlowPhase.Cancelled, null)
+        _flows.update { it - p }
         val s = synchronized(sessions) { sessions.remove(p) }
         ci("flow $p: cancel")
         AppController.scope.launch(Dispatchers.IO) { s?.cancel() }
@@ -198,7 +206,7 @@ object ProviderFlows {
         val s = synchronized(sessions) { sessions[p] } ?: return
         set(p) { it.copy(wantsCode = false, phase = FlowPhase.Verifying, error = null) }
         AppController.scope.launch(Dispatchers.IO) {
-            if (!s.send(code.trim() + "\n")) finish(p, FlowPhase.Failed, "The sign-in process ended before the code arrived.")
+            if (!s.send(code.trim() + "\n")) finish(p, null, FlowPhase.Failed, "The sign-in process ended before the code arrived.")
         }
     }
 

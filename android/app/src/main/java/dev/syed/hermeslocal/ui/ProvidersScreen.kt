@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material3.AlertDialog
@@ -48,6 +49,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -57,6 +60,7 @@ import dev.syed.hermeslocal.providers.FlowPhase
 import dev.syed.hermeslocal.providers.ProviderFlows
 import dev.syed.hermeslocal.providers.ProviderId
 import dev.syed.hermeslocal.providers.SignInFlow
+import dev.syed.hermeslocal.providers.VoiceKey
 import kotlinx.coroutines.launch
 
 /** Model provider sign-in (runs `hermes-local-auth` in the engine). Works whether or not the server is on. */
@@ -70,7 +74,7 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
     var picker by remember { mutableStateOf<ProviderId?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) { ProviderFlows.refresh() }
+    LaunchedEffect(Unit) { ProviderFlows.refresh(); VoiceKey.refresh() }
 
     // Open the browser once per URL, and only after what the user needs is on screen:
     // Codex: the code (copied too); Antigravity: the link (it has no code to show first).
@@ -147,6 +151,7 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
                 }
             }
         }
+        OpenAiKeyCard()
         notice?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
         statusInfo?.error?.let { Text("Status check failed: $it", color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
     }
@@ -157,6 +162,79 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
         }
     }
     picker?.let { p -> ModelPicker(p, current = statusInfo?.takeIf { it.isChatProvider(p) }?.model, onDismiss = { picker = null }) { notice = it } }
+}
+
+/** Optional OpenAI API key for GPT-Live (Hermes' voice_live needs a real API key; ChatGPT/Codex sign-in can't do it). */
+@Composable
+private fun OpenAiKeyCard() {
+    val scope = rememberCoroutineScope()
+    val voice by VoiceKey.status.collectAsStateWithLifecycle()
+    var key by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var confirmRemove by remember { mutableStateOf(false) }
+    Card(
+        Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            val v = voice
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("OpenAI API key (for GPT-Live)", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                if (v == null || busy) LoadingIndicator(Modifier.size(28.dp)) else KeyDot(v.openAiKey)
+            }
+            Text(
+                "Optional. GPT-Live in the Hermes app needs an OpenAI API key (OpenAI bills it per minute); a ChatGPT/Codex " +
+                    "sign-in cannot start it. Live Mode with the Hermes speech engine works without a key. The key stays in Hermes' .env on this phone.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (v != null && v.error == null && v.sttProvider.isNotEmpty()) {
+                val hears = if (v.sttProvider == "local") "Whisper ${v.sttModel} on this phone, automatic language" else v.sttProvider
+                Text("Live Mode hears with $hears · speaks with ${v.ttsProvider.replaceFirstChar { it.uppercase() }}", style = MaterialTheme.typography.bodySmall)
+            }
+            if (v?.openAiKey == true) {
+                Text(
+                    "Saved ${v.keyHint} · " + if (v.gptLive) "GPT-Live ready" else "GPT-Live not ready",
+                    style = MaterialTheme.typography.bodySmall, color = if (v.gptLive) MaterialTheme.colorScheme.primary else StatusColors.Amber,
+                )
+            }
+            OutlinedTextField(
+                key, { key = it.trim(); error = null }, label = { Text(if (v?.openAiKey == true) "Replace key (sk-…)" else "OpenAI API key (sk-…)") },
+                singleLine = true, modifier = Modifier.fillMaxWidth(), enabled = !busy,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    busy = true; error = null
+                    scope.launch {
+                        error = VoiceKey.save(key)
+                        if (error == null) key = ""
+                        busy = false
+                    }
+                }, enabled = !busy && key.length >= 20, shapes = ButtonDefaults.shapes()) { Text("Save key") }
+                if (v?.openAiKey == true) {
+                    OutlinedButton(onClick = { confirmRemove = true }, enabled = !busy, shapes = ButtonDefaults.shapes()) { Text("Remove") }
+                }
+            }
+            (error ?: v?.error)?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
+    if (confirmRemove) {
+        ConfirmDialog("Remove the OpenAI key?", "GPT-Live stops working. Live Mode with the Hermes speech engine keeps working.", "Remove", { confirmRemove = false }) {
+            busy = true
+            scope.launch { error = VoiceKey.clear(); busy = false }
+        }
+    }
+}
+
+@Composable
+private fun KeyDot(on: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline))
+        Spacer(Modifier.width(6.dp))
+        Text(if (on) "Saved" else "Not set", style = MaterialTheme.typography.labelLarge)
+    }
 }
 
 @Composable
