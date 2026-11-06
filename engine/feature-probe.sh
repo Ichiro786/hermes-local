@@ -62,6 +62,7 @@ curl -s -o /dev/null -c "$work/cookies" -H 'Content-Type: application/json' \
 # MCP: a stdio server on Hermes' own python (mcp SDK = the "mcp" extra above) + the node runtime for npx servers
 cat >"$work/mcp_probe.py" <<'PY'
 import sys
+sys.stderr = open("/tmp/mcp_probe.err", "w", buffering=1)
 sys.path.insert(0, "/opt/hermes/hermes-agent")
 import hermes_bootstrap  # noqa: F401
 from mcp.server.fastmcp import FastMCP
@@ -73,9 +74,13 @@ def echo(text: str) -> str:
 app.run()
 PY
 cp "$work/mcp_probe.py" "$M/tmp/mcp_probe.py"
-c=$(api POST /api/mcp/servers '{"name":"hlprobe","command":"/opt/hermes-local/bin/hermes-py","args":["-I","/tmp/mcp_probe.py"]}')
+py=$(run /bin/bash -lc 'ls /opt/hermes/tools/python-*/bin/python3 | head -n1')
+c=$(api POST /api/mcp/servers "{\"name\":\"hlprobe\",\"command\":\"$py\",\"args\":[\"-I\",\"/tmp/mcp_probe.py\"]}")
 c2=$(api POST /api/mcp/servers/hlprobe/test)
-grep -q echo "$work/f.json" && feat mcp-stdio works "add $c, test $c2: $(body 160)" || feat mcp-stdio fail "add $c, test $c2: $(body 200)"
+grep -q echo "$work/f.json" && feat mcp-stdio-python works "add $c, test $c2: $(body 160)" || feat mcp-stdio-python fail "add $c, test $c2: $(body 200) | stderr: $(tail -c 300 "$M/tmp/mcp_probe.err" 2>/dev/null | tr '\n' ' ')"
+c=$(api POST /api/mcp/servers '{"name":"everything","command":"npx","args":["-y","@modelcontextprotocol/server-everything"]}')
+c2=$(api POST /api/mcp/servers/everything/test)
+grep -q '"ok":true' "$work/f.json" && feat mcp-stdio-npx works "server-everything via managed npx: add $c, test $c2: $(body 160)" || feat mcp-stdio-npx fail "add $c, test $c2: $(body 250)"
 node=$(run /bin/bash -lc 'ls -d /opt/hermes/tools/node-*/bin 2>/dev/null | head -n1')
 feat node-runtime info "node $(run /bin/bash -lc "$node/node --version" 2>/dev/null), npm dir: $(run /bin/bash -lc 'ls -d /opt/hermes/tools/npm-*/bin 2>/dev/null')"
 
