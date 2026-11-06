@@ -135,7 +135,11 @@ step "Voice: Edge TTS, cloud speech-to-text, live voice bridge (no local Whisper
 # and keeps only Edge TTS (free default voice) and Hermes' ffmpeg.
 size_before=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
 in_root "hermes pm install --extra edge-tts </dev/null 2>&1 | grep -v '^ *$' | tail -n 4"
+# An extra install publishes a new dependency generation and keeps the superseded one (engine-v0.23.0-3 first
+# build: +104 MiB for edge-tts); pm gc drops generations and store entries nothing references.
+in_root "hermes pm gc </dev/null 2>&1 | tail -n 3" || echo "::warning::hermes pm gc failed"
 rm -rf "$ROOTFS/root/.cache"
+du -sh "$ROOTFS"/root/.hermes/* 2>/dev/null | sort -h | tail -n 6 || true
 size_edge=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
 in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap, edge_tts; print(\"edge-tts\", edge_tts.__version__)'"
 in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap, importlib.util as u; assert u.find_spec(\"faster_whisper\") is None, \"faster-whisper must not be installed\"; print(\"no faster-whisper: ok\")'"
@@ -145,6 +149,40 @@ in_root "/bin/bash /opt/hermes-local/bin/hermes-py -m pip --version >/dev/null 2
 in_root "/bin/bash /opt/hermes-local/bin/hermes-py -m pip install --disable-pip-version-check --no-cache-dir --only-binary=:all: \
   --target /opt/hermes-local/live-libs 'aiortc==1.16.0' 'aiohttp>=3.10' 2>&1 | tail -n 3"
 rm -rf "$ROOTFS/opt/hermes-local/live-libs/bin" "$ROOTFS/root/.cache"
+# Drop packages Hermes' own environment already provides (aiohttp, cryptography, cffi, ...): live-libs is appended
+# to sys.path, so Hermes' copies would win anyway.
+cat >"$ROOTFS/tmp/hl-dedupe.py" <<'PY'
+import importlib.util, os, shutil, sys
+sys.path.insert(0, "/opt/hermes/hermes-agent")
+import hermes_bootstrap  # noqa: F401  (Hermes' dependency environment)
+libs = "/opt/hermes-local/live-libs"
+assert libs not in sys.path
+keep_always = {"aiortc", "av", "aioice", "pylibsrtp", "pyee", "google_crc32c", "ifaddr", "dns", "OpenSSL"}
+for info in sorted(os.listdir(libs)):
+    if not info.endswith(".dist-info"):
+        continue
+    d = os.path.join(libs, info)
+    tops = set()
+    for line in open(os.path.join(d, "RECORD"), encoding="utf-8"):
+        top = line.split(",", 1)[0].split("/", 1)[0]
+        if top and not top.endswith((".dist-info", ".libs")) and top != "..":
+            tops.add(top[:-3] if top.endswith(".py") else top)
+    if not tops or tops & keep_always:
+        continue
+    if all(importlib.util.find_spec(t) is not None for t in tops if not t.startswith("_")):
+        for t in tops:
+            for cand in (os.path.join(libs, t), os.path.join(libs, t + ".py")):
+                if os.path.isdir(cand): shutil.rmtree(cand)
+                elif os.path.exists(cand): os.remove(cand)
+        for extra in os.listdir(libs):  # vendored shared libs of that wheel (e.g. cffi.libs)
+            if extra.endswith(".libs") and extra.split(".")[0].lower() in {t.lower() for t in tops}:
+                shutil.rmtree(os.path.join(libs, extra), ignore_errors=True)
+        shutil.rmtree(d)
+        print("live-libs: Hermes already has", info, "->", ",".join(sorted(tops)))
+PY
+in_root "/bin/bash /opt/hermes-local/bin/hermes-py -I /tmp/hl-dedupe.py" || echo "::warning::live-libs dedupe failed"
+rm -f "$ROOTFS/tmp/hl-dedupe.py"
+du -sh "$ROOTFS"/opt/hermes-local/live-libs/* 2>/dev/null | sort -h | tail -n 8 || true
 find "$ROOTFS/opt/hermes-local/live-libs" -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
 size_live=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
 # Hook: tools/voice_live.py hands status + session creation to hermes_local_live (falls back to stock on error).
