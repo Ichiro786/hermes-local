@@ -195,7 +195,7 @@ t0=$(date +%s)
 adb shell am start -n $PKG/.MainActivity
 sleep 5; adb exec-out screencap -p >"$OUT/01-first-run.png"
 # First-run install (verify + unpack ~1 GB) — wait for the password card.
-for _ in $(seq 1 120); do
+for _ in $(seq 1 240); do   # test3 payload is ~1.7 GB (voice models)
   appsh "ls files/r/opt/hermes-local/bin/hermes-local-start" >/dev/null 2>&1 && \
     ! appsh "ls files/r.partial" >/dev/null 2>&1 && break
   sleep 5

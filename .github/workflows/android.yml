@@ -11,7 +11,7 @@ on:
     inputs:
       engine_tag:
         description: "Engine release to bundle"
-        default: "engine-v0.23.0-1"
+        default: "engine-v0.23.0-2"
       version_name:
         default: "1.0.0"
       emulator:
