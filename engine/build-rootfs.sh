@@ -135,11 +135,11 @@ step "Voice: faster-whisper + Whisper $WHISPER_MODEL + Edge TTS (Live Mode works
 # Without these, Hermes v0.23.0 has no STT provider: /api/audio/transcribe answers 400 "No STT provider
 # available" (the Hermes Android app's Live Mode: "That didn't come through: HTTP 400"), and the extras
 # would only load after an engine restart.
-size_before=$(du -sb "$ROOTFS" | cut -f1)
+size_before=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
 in_root "hermes pm install --extra stt-whisper </dev/null 2>&1 | grep -v '^ *$' | tail -n 4"
 in_root "hermes pm install --extra edge-tts </dev/null 2>&1 | grep -v '^ *$' | tail -n 4"
 rm -rf "$ROOTFS/root/.cache"
-size_deps=$(du -sb "$ROOTFS" | cut -f1)
+size_deps=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
 install -d -m 0755 "$ROOTFS/opt/hermes-local/hf-hub"
 install -m 0644 "$SCRIPT_DIR/testdata/jfk.wav" "$ROOTFS/tmp/jfk.wav"
 # Download the model into the engine's own HF cache (hermes-local-start points HF_HUB_CACHE there) and
@@ -176,7 +176,7 @@ else
 fi
 in_root "command -v ffmpeg && ffmpeg -hide_banner -version | head -n1"
 printf '%s\n' "$WHISPER_MODEL" >"$ROOTFS/opt/hermes-local/whisper-model"
-size_after=$(du -sb "$ROOTFS" | cut -f1)
+size_after=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
 echo "voice size: python deps +$(( (size_deps - size_before) / 1048576 )) MiB, whisper $WHISPER_MODEL model +$(( (size_after - size_deps) / 1048576 )) MiB (installed)"
 du -sh "$ROOTFS/opt/hermes-local/hf-hub" || true
 endstep
