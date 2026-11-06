@@ -60,7 +60,7 @@ curl -s -o /dev/null -c "$work/cookies" -H 'Content-Type: application/json' \
   -d "{\"provider\":\"basic\",\"username\":\"admin\",\"password\":\"$PW\"}" "$base/auth/password-login"
 
 voice_probe after-extras 0
-[ "${VOICE_BENCH:-0}" = 1 ] && voice_bench
+# (Whisper benchmark removed in test4: the engine has no local Whisper.)
 
 # MCP: a stdio server on Hermes' own python (mcp SDK = the "mcp" extra above) + the node runtime for npx servers
 cat >"$work/mcp_probe.py" <<'PY'

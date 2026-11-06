@@ -8,10 +8,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
-/** Engine voice settings (`hermes-local-voice`): what Live Mode hears/speaks with, and the optional GPT-Live key. */
+/** Engine voice settings (`hermes-local-voice`): what Live Mode hears/speaks with, the optional voice keys and
+ *  which engine answers the Hermes app's GPT-Live mode (ChatGPT/Codex sign-in, OpenAI key or Gemini Live). */
 data class VoiceStatus(
     val sttProvider: String = "",
-    val sttModel: String = "",
+    /** What speech-to-text really uses: openai | gemini | none (or another Hermes provider name). */
+    val sttBackend: String = "",
     val ttsProvider: String = "",
     val ttsModel: String = "",
     val openAiKey: Boolean = false,
@@ -19,6 +21,14 @@ data class VoiceStatus(
     val geminiKey: Boolean = false,
     val geminiHint: String = "",
     val gptLive: Boolean = false,
+    val liveReason: String = "",
+    /** codex | openai | gemini | none: the engine GPT-Live uses now. */
+    val liveBackend: String = "",
+    /** auto | codex | openai | gemini: the user's choice. */
+    val liveSelected: String = "auto",
+    /** Engines that have credentials, in automatic order. */
+    val liveBackends: List<String> = emptyList(),
+    val liveModel: String = "",
     val error: String? = null,
 ) {
     companion object {
@@ -30,11 +40,14 @@ data class VoiceStatus(
                 val o = JSONObject(json)
                 if (!o.optBoolean("ok", true) && !o.has("stt_provider")) return VoiceStatus(error = o.optString("error"))
                 VoiceStatus(
-                    sttProvider = o.optString("stt_provider"), sttModel = o.optString("stt_model"),
+                    sttProvider = o.optString("stt_provider"), sttBackend = o.optString("stt_backend"),
                     ttsProvider = o.optString("tts_provider"), ttsModel = o.optString("tts_model"),
                     openAiKey = o.optInt("openai_key") == 1, keyHint = o.optString("openai_key_hint"),
                     geminiKey = o.optInt("gemini_key") == 1, geminiHint = o.optString("gemini_key_hint"),
-                    gptLive = o.optInt("gpt_live") == 1,
+                    gptLive = o.optInt("gpt_live") == 1, liveReason = o.optString("gpt_live_reason"),
+                    liveBackend = o.optString("live_backend"), liveSelected = o.optString("live_selected", "auto").ifEmpty { "auto" },
+                    liveBackends = o.optJSONArray("live_backends")?.let { a -> List(a.length()) { a.optString(it) } } ?: emptyList(),
+                    liveModel = o.optString("live_model"),
                     error = if (o.has("error")) o.optString("error") else null,
                 )
             } catch (e: Exception) {
@@ -64,6 +77,9 @@ object VoiceKey {
     suspend fun save(kind: VoiceKeyKind, key: String): String? = apply(listOf("${kind.arg}-key", "set"), key.trim() + "\n")
 
     suspend fun clear(kind: VoiceKeyKind): String? = apply(listOf("${kind.arg}-key", "clear"), null)
+
+    /** auto | codex | openai | gemini: which engine answers the Hermes app's GPT-Live mode. */
+    suspend fun setLiveBackend(value: String): String? = apply(listOf("live-backend", "set", value), null)
 
     private suspend fun apply(args: List<String>, stdin: String?): String? {
         val r = AppController.runner.run(VOICE + args, stdin = stdin, timeoutSec = 150)

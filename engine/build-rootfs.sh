@@ -13,8 +13,7 @@
 #   /root/.hermes              HERMES_HOME: config, auth, plugins, sessions (user data; kept on update)
 #
 # Env: OUT_DIR, WORK_DIR, HERMES_REF (tag, default v0.23.0), HERMES_COMMIT (sha of that tag),
-#      ENGINE_REVISION, GIT_SHA, XZ_LEVEL (default 7: multithreaded within memory), WITH_AGY (default 1),
-#      WHISPER_MODEL (default small)
+#      ENGINE_REVISION, GIT_SHA, XZ_LEVEL (default 7: multithreaded within memory), WITH_AGY (default 1)
 set -euo pipefail
 export LC_ALL=C DEBIAN_FRONTEND=noninteractive
 
@@ -26,7 +25,6 @@ HERMES_REF="${HERMES_REF:-v0.23.0}"
 HERMES_COMMIT="${HERMES_COMMIT:-}"
 XZ_LEVEL="${XZ_LEVEL:-7}"
 WITH_AGY="${WITH_AGY:-1}"
-WHISPER_MODEL="${WHISPER_MODEL:-small}"  # faster-whisper model preinstalled for Live Mode (tiny|base|small)
 UBUNTU_BASE_DIR="${UBUNTU_BASE_DIR:-https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release}"
 
 fail() { echo "build-rootfs: $*" >&2; exit 1; }
@@ -131,29 +129,51 @@ in_root "hermes plugins install antigravity-oauth --enable --yes-deps </dev/null
 in_root "hermes plugins list 2>&1 | tail -n 20" || true
 endstep
 
-step "Voice: faster-whisper + Whisper $WHISPER_MODEL + Edge TTS (Live Mode works without an on-demand install)"
-# Without these, Hermes v0.23.0 has no STT provider: /api/audio/transcribe answers 400 "No STT provider
-# available" (the Hermes Android app's Live Mode: "That didn't come through: HTTP 400"), and the extras
-# would only load after an engine restart.
+step "Voice: Edge TTS, cloud speech-to-text, live voice bridge (no local Whisper)"
+# v1.0.0-test3 shipped faster-whisper + Whisper small (~1 GB installed) for /api/audio/transcribe. Syed never
+# asked for local STT: test4 transcribes with the key the user saved (hermes_local_stt.py: OpenAI, else Gemini)
+# and keeps only Edge TTS (free default voice) and Hermes' ffmpeg.
 size_before=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
-in_root "hermes pm install --extra stt-whisper </dev/null 2>&1 | grep -v '^ *$' | tail -n 4"
 in_root "hermes pm install --extra edge-tts </dev/null 2>&1 | grep -v '^ *$' | tail -n 4"
 rm -rf "$ROOTFS/root/.cache"
-size_deps=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
-install -d -m 0755 "$ROOTFS/opt/hermes-local/hf-hub"
-install -m 0644 "$SCRIPT_DIR/testdata/jfk.wav" "$ROOTFS/tmp/jfk.wav"
-# Download the model into the engine's own HF cache (hermes-local-start points HF_HUB_CACHE there) and
-# transcribe a real sample with automatic language detection, the way Hermes' local provider loads it.
-in_root "HF_HUB_CACHE=/opt/hermes-local/hf-hub HF_HUB_DISABLE_TELEMETRY=1 /bin/bash /opt/hermes-local/bin/hermes-py -c '
-import time, hermes_bootstrap
-from faster_whisper import WhisperModel
-t = time.monotonic(); m = WhisperModel(\"$WHISPER_MODEL\", device=\"cpu\", compute_type=\"int8\"); load = time.monotonic() - t
-t = time.monotonic(); segs, info = m.transcribe(\"/tmp/jfk.wav\", vad_filter=True); text = \" \".join(s.text.strip() for s in segs)
-print(\"whisper $WHISPER_MODEL: load %.1fs, transcribe %.1fs of %.1fs audio, language %s: %s\" % (load, time.monotonic() - t, info.duration, info.language, text))
-assert \"country\" in text.lower(), text
-import edge_tts; print(\"edge-tts\", edge_tts.__version__)
-'"
-rm -f "$ROOTFS/tmp/jfk.wav"; rm -rf "$ROOTFS/root/.cache"
+size_edge=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
+in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap, edge_tts; print(\"edge-tts\", edge_tts.__version__)'"
+in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap, importlib.util as u; assert u.find_spec(\"faster_whisper\") is None, \"faster-whisper must not be installed\"; print(\"no faster-whisper: ok\")'"
+# Live voice bridge (hermes_local_live.py): the host answers the app's GPT-Live WebRTC offer itself for the
+# ChatGPT (Codex) and Gemini backends. aiortc + PyAV in their own --target dir, appended to sys.path at use.
+in_root "/bin/bash /opt/hermes-local/bin/hermes-py -m pip --version >/dev/null 2>&1 || /bin/bash /opt/hermes-local/bin/hermes-py -m ensurepip >/dev/null"
+in_root "/bin/bash /opt/hermes-local/bin/hermes-py -m pip install --disable-pip-version-check --no-cache-dir --only-binary=:all: \
+  --target /opt/hermes-local/live-libs 'aiortc==1.16.0' 'aiohttp>=3.10' 2>&1 | tail -n 3"
+rm -rf "$ROOTFS/opt/hermes-local/live-libs/bin" "$ROOTFS/root/.cache"
+find "$ROOTFS/opt/hermes-local/live-libs" -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+size_live=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
+# Hook: tools/voice_live.py hands status + session creation to hermes_local_live (falls back to stock on error).
+vl="$ROOTFS/opt/hermes/hermes-agent/tools/voice_live.py"
+grep -q '^def create_webrtc_session' "$vl" && grep -q '^def resolve_gpt_live_status' "$vl" && grep -q '^def _live_section' "$vl" \
+  || fail "tools/voice_live.py changed upstream: hermes-local live hook needs a review"
+cat >>"$vl" <<'PY'
+
+
+# hermes-local: ChatGPT (Codex) and Gemini Live backends behind GPT-Live (/opt/hermes-local/bin/hermes_local_live.py)
+try:
+    import sys as _hl_sys
+    if "/opt/hermes-local/bin" not in _hl_sys.path:
+        _hl_sys.path.append("/opt/hermes-local/bin")
+    from hermes_local_live import install as _hl_install
+    _hl_install(globals())
+except Exception as _hl_exc:  # noqa: BLE001
+    logger.warning("hermes-local live voice backends unavailable: %s", _hl_exc)
+PY
+# Build-time proof on this arch: aiortc/av import with Hermes' python, and a whole live conversation (stand-in
+# app <-> bridge <-> local fake Gemini / fake Codex peer: audio both ways, delegation, reply, mute, close).
+for kind in gemini codex; do
+  in_root "cd /tmp && timeout 150 /bin/bash /opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_live_check.py module-fake $kind" \
+    >"$WORK_DIR/live-fake-$kind.txt" 2>&1 || true
+  grep -E '^LIVE' "$WORK_DIR/live-fake-$kind.txt" || tail -n 30 "$WORK_DIR/live-fake-$kind.txt"
+  mkdir -p "$OUT_DIR/captures-$ASSET_ARCH" && cp "$WORK_DIR/live-fake-$kind.txt" "$OUT_DIR/captures-$ASSET_ARCH/build-live-fake-$kind.txt"
+  grep -q '^LIVE_RESULT ok' "$WORK_DIR/live-fake-$kind.txt" || fail "live bridge self-test ($kind) failed"
+done
+in_root "/bin/bash /opt/hermes-local/bin/hermes-py -I -c 'import sys; sys.path.append(\"/opt/hermes-local/live-libs\"); import aiortc, av; print(\"aiortc\", aiortc.__version__, \"av\", av.__version__)'" | tee "$WORK_DIR/live-versions.txt"
 # Gemini TTS: Google's current models (gemini-3.8-flash[-lite]-tts) answer generateContent with a complete
 # WAV, while Hermes v0.23.0 always wraps the reply as raw PCM (WAV-in-WAV: a header-sized click). One-line
 # patch: keep a reply that already is RIFF/WAVE as it is. Fails the build if the upstream line moved.
@@ -175,10 +195,8 @@ else
   echo "::warning::no Hermes-managed ffmpeg; installing Ubuntu's"; in_root "apt-get install -y --no-install-recommends ffmpeg"
 fi
 in_root "command -v ffmpeg && ffmpeg -hide_banner -version | head -n1"
-printf '%s\n' "$WHISPER_MODEL" >"$ROOTFS/opt/hermes-local/whisper-model"
-size_after=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
-echo "voice size: python deps +$(( (size_deps - size_before) / 1048576 )) MiB, whisper $WHISPER_MODEL model +$(( (size_after - size_deps) / 1048576 )) MiB (installed)"
-du -sh "$ROOTFS/opt/hermes-local/hf-hub" || true
+echo "voice size (installed): edge-tts +$(( (size_edge - size_before) / 1048576 )) MiB ($(( size_edge - size_before )) B), live bridge libs +$(( (size_live - size_edge) / 1048576 )) MiB ($(( size_live - size_edge )) B)"
+du -sh "$ROOTFS/opt/hermes-local/live-libs" || true
 endstep
 
 if [ "$WITH_AGY" = 1 ]; then
@@ -269,7 +287,8 @@ hermes_ref=$HERMES_REF
 hermes_commit=${HERMES_COMMIT:-}
 hermes_version=$hermes_version
 agy=$agy_version
-whisper=$WHISPER_MODEL
+live=$(tr '\n' ' ' <"$WORK_DIR/live-versions.txt" 2>/dev/null)
+stt=cloud (hermes_local_stt.py: OpenAI or Gemini key)
 ubuntu_base=$base_version
 arch=$ARCH
 built=$(date -u +%Y-%m-%dT%H:%M:%SZ)

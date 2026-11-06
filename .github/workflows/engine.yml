@@ -19,9 +19,6 @@ on:
       publish:
         type: boolean
         default: true
-      whisper_model:
-        description: "faster-whisper model preinstalled for Live Mode (tiny|base|small)"
-        default: "small"
 
 permissions:
   contents: write
@@ -72,9 +69,8 @@ jobs:
           HERMES_COMMIT: ${{ steps.ref.outputs.sha }}
           ENGINE_REVISION: ${{ inputs.revision }}
           GIT_SHA: ${{ github.sha }}
-          WHISPER_MODEL: ${{ inputs.whisper_model }}
         run: |
-          sudo --preserve-env=OUT_DIR,WORK_DIR,HERMES_REF,HERMES_COMMIT,ENGINE_REVISION,GIT_SHA,WHISPER_MODEL bash engine/build-rootfs.sh
+          sudo --preserve-env=OUT_DIR,WORK_DIR,HERMES_REF,HERMES_COMMIT,ENGINE_REVISION,GIT_SHA bash engine/build-rootfs.sh
           sudo chown -R "$(id -u):$(id -g)" "$OUT_DIR"
           ls -l "$OUT_DIR"
 
@@ -137,7 +133,7 @@ jobs:
             grep -qx "chroot=success proot=success" "out/smoke-$f.txt" || { echo "::error::$f smoke failed ($(cat out/smoke-$f.txt 2>/dev/null)); not publishing"; exit 1; }
           done
           {
-            echo "Hermes Local engine payload: Hermes Agent ${{ inputs.hermes_ref }}, Ubuntu 24.04, antigravity-oauth plugin, agy CLI, voice (faster-whisper ${{ inputs.whisper_model }} + edge-tts, Live Mode works out of the box)."
+            echo "Hermes Local engine payload: Hermes Agent ${{ inputs.hermes_ref }}, Ubuntu 24.04, antigravity-oauth plugin, agy CLI, voice (edge-tts, cloud speech-to-text from the user's OpenAI/Gemini key, live voice bridge: GPT-Live via ChatGPT/Codex sign-in or Gemini Live; no local Whisper)."
             echo
             for f in out/rootfs-*.tar.xz; do echo "- \`$(basename "$f")\`: $(( $(stat -c %s "$f") / 1048576 )) MiB, sha256 \`$(cut -d' ' -f1 "$f.sha256")\`"; done
             echo

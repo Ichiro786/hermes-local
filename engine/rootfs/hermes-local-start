@@ -9,8 +9,6 @@ export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools
 export PATH=/opt/hermes-local/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LANG=${LANG:-C.UTF-8} PYTHONUNBUFFERED=1 TMPDIR=/tmp
 export AGY_CLI_DISABLE_AUTO_UPDATE=1  # the engine is updated as a whole (never agy or Hermes by themselves)
-# Live Mode / voice: the engine ships faster-whisper + a Whisper model in this Hugging Face cache.
-export HF_HUB_CACHE=/opt/hermes-local/hf-hub HF_HUB_DISABLE_TELEMETRY=1
 [ -r /etc/ssl/certs/ca-certificates.crt ] && export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 STATE=/root/.hermes-local
 mkdir -p "$STATE" "$HERMES_HOME" /tmp
@@ -28,9 +26,10 @@ if ! hermes-local-passwd --check >/dev/null 2>&1; then
   exit 3
 fi
 
-# Voice defaults once per HERMES_HOME (local Whisper STT with automatic language, Edge TTS): without an
+# Voice defaults once per HERMES_HOME (cloud STT from the saved OpenAI/Gemini key, automatic language, Edge TTS;
+# v2 also moves test3's local-Whisper setting over, the engine no longer ships Whisper): without an
 # STT provider the apps' Live Mode gets HTTP 400 "No STT provider available" from /api/audio/transcribe.
-if [ ! -e "$STATE/voice-defaults-v1" ]; then
+if [ ! -e "$STATE/voice-defaults-v2" ]; then
   /bin/bash /opt/hermes-local/bin/hermes-local-voice defaults 2>&1 | sed -u 's/^/[hermes-local] voice defaults: /' | tail -n 3
 fi
 

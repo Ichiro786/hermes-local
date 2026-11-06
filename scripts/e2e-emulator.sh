@@ -149,9 +149,15 @@ G
   check "chat via /api/ws streams the stub reply" "$(grep -q '^CHAT_OK.*stub model' "$P/chat-after.txt" && echo 1 || echo 0)"
   check "no 'not connected' error after Use for chat" "$(grep -q 'not connected' "$P/chat-after.txt" && echo 0 || echo 1)"
 
-  echo "== OpenAI API key (for GPT-Live) card"
+  echo "== Voice card: no local Whisper, GPT-Live on the (stub) ChatGPT/Codex sign-in"
   r=$(find_node '^Live Mode hears with '); echo "voice line: $r" | tee -a "$P/checks.txt"
-  check "voice defaults: Live Mode hears with local Whisper (automatic language), speaks with Edge" "$(grep -qE 'Whisper [a-z0-9.-]+ on this phone, automatic language . speaks with Edge' <<<"$r" && echo 1 || echo 0)"
+  check "voice defaults: no key -> hears with 'nothing yet: add an OpenAI or Gemini key', speaks with Edge" "$(grep -q 'hears with nothing yet: add an OpenAI or Gemini key . speaks with Edge' <<<"$r" && echo 1 || echo 0)"
+  gl=0; for _ in $(seq 1 60); do find_node '^GPT-Live uses your ChatGPT \(Codex\) sign-in$' >/dev/null && { gl=1; break; }; sleep 2; done
+  shot 18b-voice-codex
+  check "GPT-Live available via the ChatGPT (Codex) sign-in, no key" "$gl"
+  check "no engine selector with a single engine" "$(grep -q 'GPT-Live engine' "$P/18b-voice-codex.xml" && echo 0 || echo 1)"
+
+  echo "== OpenAI API key (for GPT-Live) card"
   tap_node '^OpenAI API key \(sk-'; sleep 1
   adb shell input text sk-hle2e-fake-key-0123456789abcd; sleep 1
   adb shell dumpsys input_method | grep -qE "mInputShown=true|mIsInputViewShown=true|isInputViewShown=true" && adb shell input keyevent 4; sleep 1
@@ -162,11 +168,21 @@ G
   guest 'stat -c "%a %n" /root/.hermes/.env; grep -c "^VOICE_TOOLS_OPENAI_KEY=" /root/.hermes/.env' 60 | tee "$P/openai-key-env.txt"
   check "key in ~/.hermes/.env (0600) as VOICE_TOOLS_OPENAI_KEY" "$(grep -q '^600 ' "$P/openai-key-env.txt" && grep -qx 1 "$P/openai-key-env.txt" && echo 1 || echo 0)"
   check "key not shown on screen" "$(grep -q 'sk-hle2e' "$P/19-openai-key-saved.xml" && echo 0 || echo 1)"
+  r=$(find_node '^Live Mode hears with '); echo "voice line: $r" | tee -a "$P/checks.txt"
+  check "with the OpenAI key: hears with OpenAI (cloud)" "$(grep -q 'hears with OpenAI (cloud)' <<<"$r" && echo 1 || echo 0)"
+  tap_node '^OpenAI API key · gpt-live-1$'; sel=0
+  for _ in $(seq 1 60); do find_node '^GPT-Live uses your OpenAI API key$' >/dev/null && { sel=1; break; }; sleep 2; done
+  shot 19b-engine-openai
+  guest 'grep -A3 "gpt_live:" /root/.hermes/config.yaml' 60 | tee "$P/live-backend-openai.txt"
+  check "engine selector (Codex + OpenAI): pick OpenAI -> 'GPT-Live uses your OpenAI API key', voice.gpt_live.backend openai" \
+    "$([ $sel = 1 ] && grep -q 'backend: openai' "$P/live-backend-openai.txt" && echo 1 || echo 0)"
   tap_node '^Remove$' --after '^OpenAI API key \(for GPT-Live\)$'; sleep 2
   tap_node '^Remove$' --after '^Remove the OpenAI key\?$'
   gone=0; for _ in $(seq 1 60); do find_node '^Not set$' --after '^Antigravity \(Gemini, Claude\)$' --before '^Gemini API key \(for Gemini voice\)$' >/dev/null && { gone=1; break; }; sleep 2; done
   shot 20-openai-key-removed
   check "Remove clears the key ('Not set')" "$gone"
+  check "after removing the OpenAI key: GPT-Live back on the ChatGPT (Codex) sign-in, selector gone" \
+    "$(find_node '^GPT-Live uses your ChatGPT \(Codex\) sign-in$' >/dev/null && ! grep -q 'GPT-Live engine' "$P/20-openai-key-removed.xml" && echo 1 || echo 0)"
 
   echo "== Gemini API key card (Gemini TTS)"
   tap_node '^Gemini API key \(AIza'; sleep 1
@@ -177,7 +193,11 @@ G
   shot 21-gemini-key-saved
   check "Gemini key saved -> 'Saved …wxyz · Gemini TTS ready'" "$saved"
   r=$(find_node '^Live Mode hears with '); echo "voice line: $r" | tee -a "$P/checks.txt"
-  check "voice line: speaks with Gemini gemini-3.8-flash-lite-tts" "$(grep -q 'speaks with Gemini gemini-3.8-flash-lite-tts' <<<"$r" && echo 1 || echo 0)"
+  check "voice line: hears with Gemini (cloud), speaks with Gemini gemini-3.8-flash-lite-tts" "$(grep -q 'hears with Gemini (cloud) . speaks with Gemini gemini-3.8-flash-lite-tts' <<<"$r" && echo 1 || echo 0)"
+  tap_node '^Gemini API key · Gemini Live$'; sel=0
+  for _ in $(seq 1 60); do find_node '^GPT-Live uses Gemini Live \(gemini-3.8-live\)$' >/dev/null && { sel=1; break; }; sleep 2; done
+  shot 21b-engine-gemini
+  check "engine selector (Codex + Gemini): pick Gemini -> 'GPT-Live uses Gemini Live (gemini-3.8-live)'" "$sel"
   guest 'stat -c "%a" /root/.hermes/.env; grep -c "^GEMINI_API_KEY=" /root/.hermes/.env; grep -A3 "^tts:" /root/.hermes/config.yaml' 60 | tee "$P/gemini-key-env.txt"
   check "GEMINI_API_KEY in .env (0600) + tts.provider gemini" "$(grep -qx 600 "$P/gemini-key-env.txt" && grep -qx 1 "$P/gemini-key-env.txt" && grep -q 'provider: gemini' "$P/gemini-key-env.txt" && echo 1 || echo 0)"
   check "Gemini key not shown on screen" "$(grep -q 'HLe2eDummy' "$P/21-gemini-key-saved.xml" && echo 0 || echo 1)"
@@ -186,6 +206,7 @@ G
   gone=0; for _ in $(seq 1 60); do find_node '^Not set$' --after '^OpenAI API key \(sk-' >/dev/null && { gone=1; break; }; sleep 2; done
   shot 22-gemini-key-removed
   check "Gemini Remove clears the key, voice back to Edge" "$([ $gone = 1 ] && find_node 'speaks with Edge$' >/dev/null && echo 1 || echo 0)"
+  check "after removing the Gemini key: GPT-Live back on the ChatGPT (Codex) sign-in" "$(find_node '^GPT-Live uses your ChatGPT \(Codex\) sign-in$' >/dev/null && echo 1 || echo 0)"
   rec_stop
   ci_log >"$P/ci-log.txt"
   [ "$prov_ok" = 1 ]
@@ -195,7 +216,7 @@ t0=$(date +%s)
 adb shell am start -n $PKG/.MainActivity
 sleep 5; adb exec-out screencap -p >"$OUT/01-first-run.png"
 # First-run install (verify + unpack ~1 GB) — wait for the password card.
-for _ in $(seq 1 240); do   # test3 payload is ~1.7 GB (voice models)
+for _ in $(seq 1 240); do   # payload ~0.9 GB (test3 was ~1.7 GB with Whisper)
   appsh "ls files/r/opt/hermes-local/bin/hermes-local-start" >/dev/null 2>&1 && \
     ! appsh "ls files/r.partial" >/dev/null 2>&1 && break
   sleep 5

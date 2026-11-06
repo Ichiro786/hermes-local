@@ -59,8 +59,9 @@ try:
     stt_reason = (r.json().get("stt") or {}).get("reason", "")
 except ValueError:
     stt_reason = ""
-# "command/plugin provider" is what the Hermes Android app shows as "HEARS WITH Plugin": no STT provider.
-line("stt-provider-resolved", "fail" if stt_reason == "command/plugin provider" else "ok", stt_reason)
+# "command/plugin provider" is what the Hermes Android app shows as "HEARS WITH Plugin": a host-side provider
+# (Hermes Local's hermes-cloud command provider, or no provider at all). Informational since test4.
+line("stt-provider-resolved", "info", stt_reason)
 r = http.get("/api/audio/voice-live/status")
 line("gpt-live-status", "info", f"{r.status_code} {r.text[:300]}")
 

@@ -77,6 +77,9 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
     var notice by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) { ProviderFlows.refresh(); VoiceKey.refresh() }
+    // GPT-Live can run on the ChatGPT (Codex) sign-in: re-read the voice status when that sign-in changes.
+    val codexSignedIn = statusInfo?.signedIn(ProviderId.Codex)
+    LaunchedEffect(codexSignedIn) { if (codexSignedIn != null) VoiceKey.refresh() }
 
     // Open the browser once per URL, and only after what the user needs is on screen:
     // Codex: the code (copied too); Antigravity: the link (it has no code to show first).
@@ -153,6 +156,7 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
                 }
             }
         }
+        LiveVoiceCard()
         VoiceKeyCard(VoiceKeyKind.OpenAi)
         VoiceKeyCard(VoiceKeyKind.Gemini)
         notice?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
@@ -167,9 +171,68 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
     picker?.let { p -> ModelPicker(p, current = statusInfo?.takeIf { it.isChatProvider(p) }?.model, onDismiss = { picker = null }) { notice = it } }
 }
 
+/** What the Hermes app's voice modes use, and (when more than one engine has credentials) which engine answers
+ *  GPT-Live: the ChatGPT (Codex) sign-in, the OpenAI key (direct) or Gemini Live (Gemini key, bridged by the engine). */
+@Composable
+private fun LiveVoiceCard() {
+    val scope = rememberCoroutineScope()
+    val voice by VoiceKey.status.collectAsStateWithLifecycle()
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val v = voice
+    Card(
+        Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Voice in the Hermes app", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                if (v == null || busy) LoadingIndicator(Modifier.size(28.dp))
+            }
+            if (v != null && v.error == null) {
+                Text(voiceLine(v), style = MaterialTheme.typography.bodySmall)
+                Text(
+                    gptLiveLine(v), style = MaterialTheme.typography.bodySmall,
+                    color = if (v.gptLive) MaterialTheme.colorScheme.primary else StatusColors.Amber,
+                )
+                if (v.liveBackends.size >= 2) {
+                    Text("GPT-Live engine", style = MaterialTheme.typography.labelLarge)
+                    for (opt in listOf("auto") + v.liveBackends) {
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(enabled = !busy) {
+                                busy = true; error = null
+                                scope.launch { error = VoiceKey.setLiveBackend(opt); busy = false }
+                            },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = v.liveSelected == opt, onClick = null, enabled = !busy)
+                            Spacer(Modifier.width(8.dp))
+                            Text(liveLabel(opt), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+            (error ?: v?.error)?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
+}
+
+private fun liveLabel(opt: String) = when (opt) {
+    "codex" -> "ChatGPT sign-in (Codex) · gpt-live-1-codex"
+    "openai" -> "OpenAI API key · gpt-live-1"
+    "gemini" -> "Gemini API key · Gemini Live"
+    else -> "Automatic (ChatGPT sign-in, then OpenAI key, then Gemini)"
+}
+
+private fun gptLiveLine(v: VoiceStatus): String = if (!v.gptLive) "GPT-Live is off: ${v.liveReason.ifEmpty { "no engine" }}" else when (v.liveBackend) {
+    "codex" -> "GPT-Live uses your ChatGPT (Codex) sign-in"
+    "openai" -> "GPT-Live uses your OpenAI API key"
+    "gemini" -> "GPT-Live uses Gemini Live (${v.liveModel.ifEmpty { "gemini-3.8-live" }})"
+    else -> "GPT-Live uses ${v.liveBackend}"
+}
+
 /** Optional voice API keys, sent to the engine on stdin and kept in Hermes' .env (0600):
- *  OpenAI for GPT-Live (Hermes' voice_live needs a real API key; a ChatGPT/Codex sign-in can't start it),
- *  Gemini for Gemini TTS (Hermes v0.23.0 has no Gemini Live voice mode and no Gemini speech-to-text). */
+ *  OpenAI for GPT-Live (direct) and speech-to-text; Gemini for Gemini Live, speech-to-text and Gemini TTS. */
 @Composable
 private fun VoiceKeyCard(kind: VoiceKeyKind) {
     val scope = rememberCoroutineScope()
@@ -192,15 +255,14 @@ private fun VoiceKeyCard(kind: VoiceKeyKind) {
                 if (v == null || busy) LoadingIndicator(Modifier.size(28.dp)) else KeyDot(saved)
             }
             Text(
-                if (openAi) "Optional. GPT-Live in the Hermes app needs an OpenAI API key (OpenAI bills it per minute); a ChatGPT/Codex " +
-                    "sign-in cannot start it. Live Mode with the Hermes speech engine works without a key. The key stays in Hermes' .env on this phone."
-                else "Optional. Hermes speaks its replies with Gemini TTS (Google AI Studio key, billed by Google). Hermes has no Gemini Live " +
-                    "voice mode and no Gemini speech-to-text, so Live Mode keeps hearing with Whisper. Remove the key to go back to the free Edge voice.",
+                if (openAi) "Optional. GPT-Live already runs on your ChatGPT (Codex) sign-in. With an OpenAI key (billed by OpenAI) GPT-Live can " +
+                    "also connect directly, and Live Mode transcribes your speech with OpenAI. The key stays in Hermes' .env on this phone."
+                else "Optional. With a Google AI Studio key (billed by Google) GPT-Live can run on Gemini Live, Live Mode transcribes with Gemini " +
+                    "(when no OpenAI key is saved) and Hermes speaks with Gemini TTS. Remove the key to go back to the free Edge voice.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (openAi && v != null && v.error == null && v.sttProvider.isNotEmpty()) Text(voiceLine(v), style = MaterialTheme.typography.bodySmall)
             if (saved && v != null) {
-                val ready = if (openAi) v.gptLive else v.ttsProvider == "gemini"
+                val ready = if (openAi) "openai" in v.liveBackends else v.ttsProvider == "gemini"
                 val what = if (openAi) "GPT-Live" else "Gemini TTS"
                 Text(
                     "Saved ${if (openAi) v.keyHint else v.geminiHint} · " + if (ready) "$what ready" else "$what not ready",
@@ -233,7 +295,8 @@ private fun VoiceKeyCard(kind: VoiceKeyKind) {
     if (confirmRemove) {
         ConfirmDialog(
             if (openAi) "Remove the OpenAI key?" else "Remove the Gemini key?",
-            if (openAi) "GPT-Live stops working. Live Mode with the Hermes speech engine keeps working." else "Hermes goes back to the free Edge voice.",
+            if (openAi) "GPT-Live keeps using your ChatGPT sign-in or Gemini key if you have one; speech-to-text switches to Gemini or stops."
+            else "Hermes goes back to the free Edge voice, and GPT-Live stops using Gemini Live.",
             "Remove", { confirmRemove = false },
         ) {
             busy = true
@@ -243,7 +306,12 @@ private fun VoiceKeyCard(kind: VoiceKeyKind) {
 }
 
 private fun voiceLine(v: VoiceStatus): String {
-    val hears = if (v.sttProvider == "local") "Whisper ${v.sttModel} on this phone, automatic language" else v.sttProvider
+    val hears = when (v.sttBackend) {
+        "openai" -> "OpenAI (cloud)"
+        "gemini" -> "Gemini (cloud)"
+        "none", "" -> "nothing yet: add an OpenAI or Gemini key"
+        else -> v.sttBackend
+    }
     val speaks = if (v.ttsProvider == "gemini") "Gemini ${v.ttsModel}" else v.ttsProvider.replaceFirstChar { it.uppercase() }
     return "Live Mode hears with $hears · speaks with $speaks"
 }

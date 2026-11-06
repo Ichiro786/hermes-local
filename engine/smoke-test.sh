@@ -154,8 +154,10 @@ if [ "$rc" = 0 ]; then
   # shellcheck source=voice-probe.sh
   . "$(dirname "$(realpath "$0")")/voice-probe.sh"
   voice_probe initial "${VOICE_STRICT:-1}"
+  voice_codex_live_probe
   voice_gptlive_probe "${VOICE_STRICT:-1}"
   voice_gemini_probe "${VOICE_STRICT:-1}"
+  voice_gemini_live_probe
   # shellcheck source=feature-probe.sh
   [ "${FEATURES:-0}" = 1 ] && . "$(dirname "$(realpath "$0")")/feature-probe.sh"
 
