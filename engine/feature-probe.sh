@@ -47,11 +47,23 @@ feat plugin-install-api "$([ "$c" = 200 ] && echo works || echo fail)" "POST ins
 for x in mcp edge-tts stt-whisper; do
   out=$(run /bin/bash -lc "timeout 600 hermes pm install --extra $x </dev/null 2>&1 | grep -v '^ *$' | tail -n 4" | tr '\n' ' ')
   mod=${x//-/_}; [ "$x" = stt-whisper ] && mod=faster_whisper
-  run /bin/bash -lc "/opt/hermes-local/bin/hermes-py -c 'import $mod' 2>/dev/null" && feat "extra-$x" works "hermes pm install --extra $x: $out" || feat "extra-$x" fail "$out"
+  run /bin/bash -lc "/opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap, $mod' 2>/dev/null" && feat "extra-$x" works "hermes pm install --extra $x: $out" || feat "extra-$x" fail "$out"
 done
+# A new dependency generation is used by processes started after it (the app: lever off/on).
+echo "== restart the engine to load the new dependency generation"
+kill -TERM "$runner" 2>/dev/null; sleep 5; pkill -KILL -f "/opt/hermes" 2>/dev/null; sleep 2
+run /bin/bash /opt/hermes-local/bin/hermes-local-start >"$work/engine2.log" 2>&1 &
+runner=$!
+for _ in $(seq 1 420); do grep -qE 'HERMES_LOCAL_(READY|FAILED)' "$work/engine2.log" && break; sleep 1; done
+grep -E 'HERMES_LOCAL_(READY|FAILED)' "$work/engine2.log"
+curl -s -o /dev/null -c "$work/cookies" -H 'Content-Type: application/json' \
+  -d "{\"provider\":\"basic\",\"username\":\"admin\",\"password\":\"$PW\"}" "$base/auth/password-login"
 
-# MCP: a stdio server on Hermes' own python (mcp SDK ships with Hermes) + the node runtime for npx servers
+# MCP: a stdio server on Hermes' own python (mcp SDK = the "mcp" extra above) + the node runtime for npx servers
 cat >"$work/mcp_probe.py" <<'PY'
+import sys
+sys.path.insert(0, "/opt/hermes/hermes-agent")
+import hermes_bootstrap  # noqa: F401
 from mcp.server.fastmcp import FastMCP
 app = FastMCP("hlprobe")
 @app.tool()
