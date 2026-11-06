@@ -3,7 +3,8 @@
 
   ui.py <dump.xml> <regex> [--after <regex>] [--before <regex>] [--nth N]
 
-Prints "cx cy enabled text" for the match (top to bottom, nth from 0) whose centre lies below the
+Prints "cx cy enabled text" (enabled of the nearest clickable ancestor-or-self: a Compose button's label
+Text always says enabled="true", the clickable View around it carries the real state) for the match (top to bottom, nth from 0) whose centre lies below the
 first node matching --after and above the first node matching --before; exit 1 when none.
 """
 import re
@@ -17,6 +18,16 @@ try:
     root = ET.parse(path).getroot()
 except Exception:  # noqa: BLE001
     sys.exit(1)
+parent = {c: p for p in root.iter() for c in p}
+
+
+def enabled(n):
+    m = n
+    while m is not None and m.get("clickable") != "true":
+        m = parent.get(m)
+    return (m if m is not None and m.tag == "node" else n).get("enabled")
+
+
 nodes = []
 for n in root.iter("node"):
     t = (n.get("text") or "") or (n.get("content-desc") or "")
@@ -24,7 +35,7 @@ for n in root.iter("node"):
     if not t or not m:
         continue
     x1, y1, x2, y2 = map(int, m.groups())
-    nodes.append(((y1 + y2) // 2, (x1 + x2) // 2, n.get("enabled"), t))
+    nodes.append(((y1 + y2) // 2, (x1 + x2) // 2, enabled(n), t))
 nodes.sort()
 
 

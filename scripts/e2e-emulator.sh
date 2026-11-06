@@ -102,7 +102,9 @@ providers_e2e() {
 
   echo "== Antigravity: rejected code -> fresh link"
   tap_node '^Paste the code from Google$'; sleep 1   # the field's placeholder, not the card description
-  adb shell input text HLE2EBADCODE123; sleep 1; adb shell input keyevent 111 2>/dev/null; sleep 1
+  adb shell input text HLE2EBADCODE123; sleep 1
+  # Hide the keyboard (it covers Submit and the swipe area); BACK only while the IME is up, else it leaves the screen.
+  adb shell dumpsys input_method | grep -qE "mInputShown=true|mIsInputViewShown=true|isInputViewShown=true" && { echo "IME up -> BACK"; adb shell input keyevent 4; }; sleep 1
   shot 15-agy-code-typed
   tap_node '^Submit code$'
   wait_log "flow Antigravity: error" 120; e=$?
