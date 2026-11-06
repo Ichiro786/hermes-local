@@ -44,3 +44,27 @@ show("image provenance", lambda: Path("/etc/hermes/image-provenance.json").read_
 launch_skips = stamp.get("updateMechanism") != "self" or not (ROOT / ".git").exists()
 print(f"diag-update: launch-time source-update completion {'DISABLED' if launch_skips else 'ARMED (updateMechanism=self)'}")
 print("diag-update: json " + json.dumps({"updateMechanism": stamp.get("updateMechanism"), "disabled": launch_skips}))
+
+# Why venv_is_current is what it is: recorded stamp vs the stamp of this tree, and its inputs.
+def _stamp_parts():
+    from pm.environments import runtime_facts_path
+    from pm.lock import Facts, Lockfile
+    from pm.packages import Venv, _uv_lock_digest
+    from pm.paths import lockfile_path
+    from pm.store import current_target
+    from pm.workspace import build_member_dirs, members_stamp
+    fact = Facts(runtime_facts_path(ROOT), strict=True).get("venv") or {}
+    venv = Venv(ROOT)
+    extras = sorted(fact.get("extras") or [])
+    return {
+        "recorded_stamp": str(fact.get("stamp"))[:16], "recorded_extras": extras,
+        "recorded_inputs": {k: (str(v)[:120]) for k, v in fact.items() if k not in ("stamp", "extras")},
+        "expected_stamp": venv.expected_stamp(extras)[:16],
+        "uv_lock_digest": _uv_lock_digest(ROOT / "uv.lock").hex()[:16] if isinstance(_uv_lock_digest(ROOT / "uv.lock"), bytes) else str(_uv_lock_digest(ROOT / "uv.lock"))[:16],
+        "target": str(current_target()),
+        "python_lock": str(Lockfile(lockfile_path()).version("python")),
+        "members": members_stamp(build_member_dirs(extras))[:200],
+    }
+
+
+show("stamp parts", _stamp_parts)

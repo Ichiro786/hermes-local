@@ -11,6 +11,8 @@ api() { # api METHOD PATH [json] -> body in $work/f.json, code on stdout
 body() { head -c "${1:-200}" "$work/f.json" | tr '\n' ' '; }
 
 echo "== feature probe"
+cp "$(dirname "$(realpath "$0")")/diag-update.py" "$M/tmp/diag-update.py"
+run /bin/bash -c '/opt/hermes-local/bin/hermes-py -I /tmp/diag-update.py' | grep -E "venv_is_current|stamp parts" | cut -c1-900
 # Sessions + analytics (gateway-owned session store)
 c=$(api GET /api/sessions); n=$(jq -r '(.sessions // .items // .) | length' "$work/f.json" 2>/dev/null)
 [ "$c" = 200 ] && feat sessions works "GET /api/sessions 200, $n session(s) after the chat turn" || feat sessions fail "$c $(body)"
