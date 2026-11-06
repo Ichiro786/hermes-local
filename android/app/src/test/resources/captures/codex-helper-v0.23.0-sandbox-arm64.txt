@@ -1,0 +1,9 @@
+HL_RAW Signing in to OpenAI Codex...
+HL_RAW (Hermes creates its own session — won't affect Codex CLI or VS Code)
+HL_RAW To continue, follow these steps:
+HL_RAW 1. Open this URL in your browser:
+HL_URL https://auth.openai.com/codex/device
+HL_RAW 2. Enter this code:
+HL_CODE 2CIW-YW3KI
+HL_STATE waiting
+HL_RAW Waiting for sign-in... (press Ctrl+C to cancel)

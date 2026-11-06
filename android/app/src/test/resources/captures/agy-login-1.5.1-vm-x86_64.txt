@@ -1,0 +1,49 @@
+HL_STATE starting agy
+HL_RAW ▄▀▀▄
+HL_RAW ▀▀▀▀▀▀
+HL_RAW ▀▀▀▀▀▀▀▀
+HL_RAW ▄▀▀    ▀▀▄
+HL_RAW ▄▀▀      ▀▀▄
+HL_RAW Welcome to the Antigravity CLI. You are currently not signed in.
+HL_RAW Select login method:
+HL_RAW > 1. Google OAuth
+HL_RAW 2. Use a Google Cloud project
+HL_RAW ↑/↓ Navigate · enter Select
+HL_STATE chose Google OAuth
+HL_RAW Open the URL below in your browser:
+HL_RAW https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com&code_challenge=1a8tAn2wanBUSKQRDE8AUpRPQbNQnTK2Osrg8j1esYA&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-call
+HL_RAW back&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcclog+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fexperimentsandconfigs+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Faicode+openid&state=XJnW6svRUjt9Vb0gJuL7gw
+HL_RAW Copy and paste the URL or click on the link below:
+HL_RAW → Click here to authenticate
+HL_RAW After authenticating, copy the code displayed in the browser and paste it below:
+HL_RAW authorization code...
+HL_RAW shift+up/down Navigate
+HL_URL https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com&code_challenge=1a8tAn2wanBUSKQRDE8AUpRPQbNQnTK2Osrg8j1esYA&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcclog+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fexperimentsandconfigs+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Faicode+openid&state=XJnW6svRUjt9Vb0gJuL7gw
+HL_PROMPT code
+HL_STATE code sent, waiting for agy
+HL_RAW /0Ab
+HL_RAW og
+HL_RAW us
+HL_RAW -co
+HL_RAW de
+HL_RAW 12
+HL_RAW ⣯  Signing in...
+HL_RAW Got an error: token exchange failed: oauth2: "invalid_grant" "Bad Request"
+HL_RAW Press any key to go back.
+HL_ERROR token exchange failed: oauth2: "invalid_grant" "Bad Request"
+HL_RAW Welcome to the Antigravity CLI. You are currently not signed in.
+HL_RAW Select login method:
+HL_RAW > 1. Google OAuth
+HL_RAW 2. Use a Google Cloud project
+HL_RAW ↑/↓ Navigate · enter Select
+HL_STATE chose Google OAuth
+HL_RAW Open the URL below in your browser:
+HL_RAW https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com&code_challenge=EqUVHm6xNaRIyWlIskUkQYtvZVrKVlb9GK8RLj_LIZo&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-call
+HL_RAW back&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcclog+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fexperimentsandconfigs+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Faicode+openid&state=vSJVe0ePY5gOq8ng-dzLqw
+HL_RAW Copy and paste the URL or click on the link below:
+HL_RAW → Click here to authenticate
+HL_RAW After authenticating, copy the code displayed in the browser and paste it below:
+HL_RAW authorization code...
+HL_RAW shift+up/down Navigate
+HL_URL https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com&code_challenge=EqUVHm6xNaRIyWlIskUkQYtvZVrKVlb9GK8RLj_LIZo&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcclog+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fexperimentsandconfigs+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Faicode+openid&state=vSJVe0ePY5gOq8ng-dzLqw
+HL_PROMPT code

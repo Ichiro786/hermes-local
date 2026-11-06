@@ -32,6 +32,8 @@ object ProotCommand {
         "PATH" to GUEST_PATH,
         "HERMES_HOME" to "/root/.hermes",
         "HERMES_RUNTIME_DIR" to "/opt/hermes/tools",
+        // The engine is replaced as a whole; agy never updates itself (Hermes: install stamp, see build-rootfs.sh).
+        "AGY_CLI_DISABLE_AUTO_UPDATE" to "1",
     ).apply { putAll(extra) }
 
     fun argv(paths: EnginePaths, guestArgv: List<String>, env: Map<String, String>): List<String> {

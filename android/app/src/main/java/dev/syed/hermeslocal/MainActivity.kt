@@ -39,14 +39,31 @@ import dev.syed.hermeslocal.ui.SettingsScreen
 enum class Screen { Main, Settings, Providers, Logs }
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        /** CI hook target screen (see handleCiHooks). */
+        val ciScreen = kotlinx.coroutines.flow.MutableStateFlow<Screen?>(null)
+    }
+
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         handleCiHooks(intent)
     }
 
-    /** CI only (BuildConfig.CI_HOOKS): `am start -e ci_password X --ez ci_toggle true` sets up and flips the lever. */
+    /**
+     * CI only (BuildConfig.CI_HOOKS): `am start -e ci_password X --ez ci_toggle true` sets up and flips the lever;
+     * `-e ci_screen providers` opens a screen; `-e ci_guest '<bash>'` runs a command in the engine and logs its
+     * output (tag HermesLocalCI, prefix "guest:").
+     */
     private fun handleCiHooks(intent: android.content.Intent?) {
         if (!BuildConfig.CI_HOOKS || intent == null) return
+        intent.getStringExtra("ci_screen")?.let { name -> Screen.entries.firstOrNull { it.name.equals(name, true) }?.let { ciScreen.value = it } }
+        intent.getStringExtra("ci_guest")?.let { cmd ->
+            AppController.scope.launch {
+                val r = AppController.runner.run(listOf("/bin/bash", "-lc", cmd), timeoutSec = 600)
+                r.output.lines().forEach { android.util.Log.i("HermesLocalCI", "guest: $it") }
+                android.util.Log.i("HermesLocalCI", "guest-exit: ${r.exitCode}")
+            }
+        }
         val pw = intent.getStringExtra("ci_password")
         val toggle = if (intent.hasExtra("ci_toggle")) intent.getBooleanExtra("ci_toggle", false) else null
         AppController.scope.launch {
@@ -67,6 +84,10 @@ class MainActivity : ComponentActivity() {
             val status by EngineState.status.collectAsStateWithLifecycle()
             HermesTheme(amoled = settings.amoled, dynamic = settings.dynamicColor) {
                 var screen by rememberSaveable { mutableStateOf(Screen.Main) }
+                if (BuildConfig.CI_HOOKS) {
+                    val ci by ciScreen.collectAsStateWithLifecycle()
+                    LaunchedEffect(ci) { ci?.let { screen = it; ciScreen.value = null } }
+                }
                 val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
                 LaunchedEffect(Unit) {
                     if (Build.VERSION.SDK_INT >= 33) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
