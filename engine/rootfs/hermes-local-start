@@ -8,6 +8,7 @@ set -u
 export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools
 export PATH=/opt/hermes-local/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LANG=${LANG:-C.UTF-8} PYTHONUNBUFFERED=1 TMPDIR=/tmp
+export AGY_CLI_DISABLE_AUTO_UPDATE=1  # the engine is updated as a whole (never agy or Hermes by themselves)
 [ -r /etc/ssl/certs/ca-certificates.crt ] && export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 STATE=/root/.hermes-local
 mkdir -p "$STATE" "$HERMES_HOME" /tmp

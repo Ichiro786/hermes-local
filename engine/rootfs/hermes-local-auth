@@ -1,43 +1,66 @@
 #!/bin/bash
 # Hermes Local: provider sign-in helper used by the app's Providers screen.
-#   hermes-local-auth status              key=value: codex=0|1 antigravity=0|1 agy=0|1
-#   hermes-local-auth login codex         device code flow (prints the URL + code, polls)
-#   hermes-local-auth login antigravity   agy Google sign-in (prints the URL, reads the code on stdin)
+#   hermes-local-auth status                  one JSON line: codex/antigravity sign-in, accounts, main model
+#   hermes-local-auth login codex             Hermes' device-code login; prints HL_URL / HL_CODE / HL_DONE
+#   hermes-local-auth login antigravity       agy Google sign-in; prints HL_URL / HL_PROMPT, reads the code
+#                                             on stdin, prints HL_DONE
 #   hermes-local-auth logout codex|antigravity
+#   hermes-local-auth models <provider>       JSON {"models": [...], "recommended": ...}
+#   hermes-local-auth use <provider> [model]  set the main chat model (what the dashboard and apps use)
+# After a successful login the provider becomes the main model when none is configured yet.
 set -u
 export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools PYTHONUNBUFFERED=1
 export PATH=/opt/hermes-local/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export BROWSER=echo  # never try to open a browser in proot; the URL is printed instead
+export BROWSER=echo                  # never try to open a browser in proot; the app opens the URL
+export AGY_CLI_DISABLE_AUTO_UPDATE=1 # the engine is updated as a whole, never agy by itself
 [ -r /etc/ssl/certs/ca-certificates.crt ] && export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-AGY_TOKEN_DIR=/root/.gemini/antigravity-cli
+BIN=/opt/hermes-local/bin
 
-codex_ok() { timeout 60 hermes auth status openai-codex 2>&1 | grep -qiE 'logged in|authenticated|valid|active|signed in' && \
-  ! timeout 60 hermes auth status openai-codex 2>&1 | grep -qiE 'not logged|no credential|not authenticated|not signed'; }
-agy_ok() { ls "$AGY_TOKEN_DIR"/*oauth-token* >/dev/null 2>&1 || ls /root/.gemini/*oauth* >/dev/null 2>&1; }
+hermes_py() { # Hermes' own python (the launcher is a /bin/sh wrapper around it)
+  local launcher real c
+  launcher=$(readlink -f /usr/local/bin/hermes)
+  real=$(sed -n 's/^exec \([^ ]*\) .*/\1/p' "$launcher" 2>/dev/null | head -n1)
+  [ -n "$real" ] && [ -f "$real" ] && launcher=$real
+  for c in "$(grep -aoE '/[^ "]*/bin/python3?[0-9.]*' "$launcher" 2>/dev/null | head -n1)" /opt/hermes/tools/python-*/bin/python3; do
+    [ -n "$c" ] && [ -x "$c" ] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+provider() { local py; py=$(hermes_py) || { echo '{"ok": false, "error": "Hermes python not found"}'; return 1; }
+  (cd /opt/hermes/hermes-agent && "$py" -I "$BIN/hermes_local_provider.py" "$@"); }
+id_of() { case "$1" in codex) echo openai-codex ;; antigravity) echo antigravity-oauth ;; *) echo "$1" ;; esac; }
 
 case "${1:-status}" in
-status)
-  echo "codex=$(codex_ok && echo 1 || echo 0)"
-  echo "antigravity=$(agy_ok && echo 1 || echo 0)"
-  echo "agy=$(command -v agy >/dev/null && echo 1 || echo 0)"
-  ;;
+status) provider status ;;
 login)
   case "${2:-}" in
-  codex) exec hermes auth add openai-codex --type oauth --no-browser ;;
-  antigravity) exec hermes auth add antigravity-oauth --no-browser ;;
+  codex)
+    python3 -u "$BIN/hermes_local_codex_login.py"; rc=$?
+    if [ $rc = 0 ]; then provider prune openai-codex >/dev/null 2>&1; echo "HL_MODEL $(provider ensure openai-codex)"; fi
+    exit $rc ;;
+  antigravity)
+    command -v agy >/dev/null || { echo "HL_DONE fail agy CLI is missing from this engine"; exit 1; }
+    python3 -u "$BIN/hermes_local_agy_login.py"; rc=$?
+    if [ $rc = 0 ]; then
+      hermes plugins enable antigravity-oauth >/dev/null 2>&1 || true
+      echo "HL_MODEL $(provider ensure antigravity-oauth)"
+    fi
+    exit $rc ;;
   *) echo "usage: login codex|antigravity" >&2; exit 2 ;;
   esac
   ;;
 logout)
   case "${2:-}" in
-  codex) exec hermes auth logout openai-codex ;;
+  codex) hermes auth logout openai-codex </dev/null; rc=$? ;;
   antigravity)
-    rm -f "$AGY_TOKEN_DIR"/*oauth-token* /root/.gemini/*oauth* 2>/dev/null
-    hermes auth logout antigravity-oauth >/dev/null 2>&1 || true
-    echo "Signed out of Antigravity"
-    ;;
+    rm -f /root/.gemini/antigravity-cli/*oauth-token* 2>/dev/null
+    echo "Signed out of Antigravity"; rc=0 ;;
   *) echo "usage: logout codex|antigravity" >&2; exit 2 ;;
   esac
+  provider fallback "$(id_of "$2")" >/dev/null 2>&1 || true
+  exit $rc
   ;;
+models) provider models "$(id_of "${2:?provider}")" ;;
+use) provider use "$(id_of "${2:?provider}")" "${3:-}" ;;
 *) echo "unknown command" >&2; exit 2 ;;
 esac

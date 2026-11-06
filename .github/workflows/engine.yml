@@ -9,7 +9,7 @@ on:
     inputs:
       hermes_ref:
         description: "Hermes Agent release tag (stable)"
-        default: "v0.22.7"
+        default: "v0.23.0"
       revision:
         description: "Payload revision (engine-<ref>-<revision>)"
         default: "1"
@@ -77,7 +77,7 @@ jobs:
       - name: Smoke test (chroot)
         id: smoke_chroot
         continue-on-error: true
-        run: sudo SMOKE_TIMEOUT=300 bash engine/smoke-test.sh "$WORK_DIR/rootfs" chroot
+        run: sudo CAPTURE_DIR="$OUT_DIR/captures-${{ matrix.arch }}" SMOKE_TIMEOUT=300 bash engine/smoke-test.sh "$WORK_DIR/rootfs" chroot
 
       # Ubuntu's apt proot (5.1.0) segfaults on Hermes' python 3.14; the phone runs Termux's proot, so the
       # host smoke test uses the same termux/proot source built for the runner.
@@ -91,11 +91,14 @@ jobs:
       - name: Smoke test (proot)
         id: smoke_proot
         continue-on-error: true
-        run: sudo PROOT="$RUNNER_TEMP/proot-src/src/proot" SMOKE_TIMEOUT=420 bash engine/smoke-test.sh "$WORK_DIR/rootfs" proot
+        run: sudo CAPTURE_DIR="$OUT_DIR/captures-${{ matrix.arch }}" PROOT="$RUNNER_TEMP/proot-src/src/proot" SMOKE_TIMEOUT=420 bash engine/smoke-test.sh "$WORK_DIR/rootfs" proot
 
       - name: Record smoke results
         run: |
           echo "chroot=${{ steps.smoke_chroot.outcome }} proot=${{ steps.smoke_proot.outcome }}" | tee out/smoke-${{ matrix.arch }}.txt
+          sudo chown -R "$(id -u):$(id -g)" out
+          # Captures travel as one tarball (the release step flattens files).
+          if [ -d "out/captures-${{ matrix.arch }}" ]; then tar -C out -czf "out/captures-${{ matrix.arch }}.tgz" "captures-${{ matrix.arch }}" && rm -rf "out/captures-${{ matrix.arch }}"; fi
 
       - uses: actions/upload-artifact@v4
         with:

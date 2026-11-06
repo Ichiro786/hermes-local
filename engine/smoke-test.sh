@@ -2,7 +2,11 @@
 # Starts the packed engine once (rootfs as read-only overlay lower layer) and checks that the Hermes
 # dashboard answers on 127.0.0.1:9119 behind the password gate.
 #   smoke-test.sh <rootfs dir> chroot|proot
-# Exit 0 when the dashboard answered and password login worked.
+# Exit 0 when the dashboard answered and password login worked, Hermes never tried to update
+# itself, the main dashboard endpoints the Hermes apps use answer, a plugin installs from inside the
+# engine, and a chat turn streams through /api/ws once a (stub) Codex sign-in exists.
+# Env: STUB_LLM=<path to scripts/stub-llm.py> (default: next to this repo), CAPTURE_DIR=<dir> for the
+# raw sign-in captures (codex device code, agy URL), SMOKE_NET_CHECKS=0 to skip the live sign-in captures.
 set -uo pipefail
 ROOTFS=$(realpath "${1:?rootfs dir}")
 MODE=${2:-chroot}
@@ -18,6 +22,7 @@ M="$work/merged"
 mounted=("$M")
 cleanup() {
   [ -n "${runner:-}" ] && kill -TERM "$runner" 2>/dev/null
+  [ -n "${stub:-}" ] && kill "$stub" 2>/dev/null
   sleep 3
   # Match only the engine processes: a bare "hermes" pattern also matches this script's own path.
   pkill -KILL -f "/opt/hermes" 2>/dev/null; pkill -KILL -f "hermes (dashboard|gateway)" 2>/dev/null
@@ -27,6 +32,14 @@ cleanup() {
 }
 trap cleanup EXIT
 cp -L /etc/resolv.conf "$M/etc/resolv.conf"
+STUB_LLM=${STUB_LLM:-$(dirname "$(realpath "$0")")/../scripts/stub-llm.py}
+CAPTURE_DIR=${CAPTURE_DIR:-}
+[ -n "$CAPTURE_DIR" ] && mkdir -p "$CAPTURE_DIR"
+STUB_PORT=18080
+python3 "$STUB_LLM" $STUB_PORT >"$work/stub.log" 2>&1 &
+stub=$!
+# The stub sign-in below routes Codex to the stub (Hermes reads HERMES_CODEX_BASE_URL from ~/.hermes/.env).
+mkdir -p "$M/root/.hermes"; echo "HERMES_CODEX_BASE_URL=http://127.0.0.1:$STUB_PORT/v1" >>"$M/root/.hermes/.env"
 envs=(HOME=/root PATH=/opt/hermes-local/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TERM=dumb)
 log="$work/engine.log"
 
@@ -78,7 +91,68 @@ if [ "$rc" = 0 ]; then
   echo "== wrong password -> $bad"
   [ "$login" = 200 ] && [ "$unauth" = 401 ] && [ "$authed" = 200 ] || rc=1
   [ "$unauth" = 401 ] || echo "::warning::password gate not engaged on loopback ($unauth)"
+  check() { # check <name> <ok?>: records a failed check
+    if [ "$2" = 1 ]; then echo "CHECK ok   $1"; else echo "CHECK FAIL $1"; rc=1; fi; }
+  note() { echo "CHECK note $1"; }
+
+  echo "== self-update never runs"
+  run /bin/bash -c 'cd /opt/hermes/hermes-agent && $(sed -n "s/^exec \([^ ]*\) .*/\1/p" $(readlink -f /usr/local/bin/hermes) | head -n1) -I /opt/hermes-local/diag-update.py'
+  check "no source-update message in engine log" "$(grep -qiE 'source-update|update is still running' "$log" && echo 0 || echo 1)"
+
+  echo "== dashboard endpoints the Hermes apps use"
+  for ep in /api/status /api/sessions /api/skills /api/dashboard/plugins /api/tools/toolsets /api/mcp/servers /api/cron/jobs \
+            /api/memory /api/model/info /api/model/options /api/files /api/profiles /api/config /api/analytics/usage \
+            /api/audio/voice-config /api/skills/hub/official /api/webhooks; do
+    code=$(curl -s -o "$work/ep.json" -w '%{http_code}' --max-time 90 -b "$work/cookies" "$base$ep")
+    echo "   $ep -> $code $(head -c 100 "$work/ep.json" | tr '\n' ' ')"
+    check "GET $ep" "$([ "$code" = 200 ] && echo 1 || echo 0)"
+  done
+  echo "== plugin install from inside the engine (catalog git plugin, no deps)"
+  run /bin/bash -lc 'timeout 300 hermes plugins install quota --enable --yes-deps </dev/null 2>&1 | tail -n 4'
+  check "plugin install quota" "$(run /bin/bash -lc 'hermes plugins list 2>&1' | grep -q quota && echo 1 || echo 0)"
+  echo "== plugin with python deps (langfuse: pm/uv dependency sync inside the engine)"
+  run /bin/bash -lc 'timeout 600 hermes plugins install langfuse --enable --yes-deps </dev/null 2>&1 | tail -n 6'
+  if run /bin/bash -lc 'cd /opt/hermes/hermes-agent && timeout 120 hermes plugins list 2>&1' | grep -E '^.*langfuse' | grep -qiE 'enabled|on|✓'; then
+    note "plugin with python deps (langfuse) installed + enabled"; else note "plugin with python deps (langfuse) NOT enabled (see log)"; fi
+  echo "== skills hub search"
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 -b "$work/cookies" "$base/api/skills/hub/search?q=git")
+  note "GET /api/skills/hub/search -> $code"
+
   echo "== hermes-local-auth status"; run /bin/bash /opt/hermes-local/bin/hermes-local-auth status
+  echo "== chat before any provider sign-in (expect: not connected)"
+  echo "$PW" | run /bin/bash -c 'cd /opt/hermes/hermes-agent && HL_CHAT_TIMEOUT=90 $(sed -n "s/^exec \([^ ]*\) .*/\1/p" $(readlink -f /usr/local/bin/hermes) | head -n1) -I /opt/hermes-local/bin/hermes_local_chat_check.py http://127.0.0.1:9119 admin Hi' \
+    >"$work/chat-before.txt" 2>&1
+  grep -E "CHAT_|MODEL_INFO" "$work/chat-before.txt" | cut -c1-300
+  check "chat before sign-in reports no provider" "$(grep -q 'not connected to any AI provider' "$work/chat-before.txt" && echo 1 || echo 0)"
+  echo "== stub Codex sign-in (fake token, Codex routed to the stub) + provider wiring"
+  jwt=$(python3 -c 'import base64,json,time;b=lambda o: base64.urlsafe_b64encode(json.dumps(o).encode()).decode().rstrip("=");print(b({"alg":"none"})+"."+b({"exp":int(time.time())+86400,"https://api.openai.com/auth":{"chatgpt_account_id":"stub"}})+".sig")')
+  run /bin/bash -lc "hermes auth add openai-codex --type api-key --api-key '$jwt' --label stub-account </dev/null 2>&1 | tail -n 2"
+  ensure=$(run /bin/bash -lc 'cd /opt/hermes/hermes-agent && $(sed -n "s/^exec \([^ ]*\) .*/\1/p" $(readlink -f /usr/local/bin/hermes) | head -n1) -I /opt/hermes-local/bin/hermes_local_provider.py ensure openai-codex' 2>&1 | tail -n1)
+  echo "   ensure -> $ensure"
+  check "provider ensure sets openai-codex" "$(grep -q '"provider": "openai-codex"' <<<"$ensure" && echo 1 || echo 0)"
+  echo "$PW" | run /bin/bash -c 'cd /opt/hermes/hermes-agent && HL_CHAT_TIMEOUT=180 $(sed -n "s/^exec \([^ ]*\) .*/\1/p" $(readlink -f /usr/local/bin/hermes) | head -n1) -I /opt/hermes-local/bin/hermes_local_chat_check.py http://127.0.0.1:9119 admin Hi' \
+    >"$work/chat-after.txt" 2>&1
+  grep -E "CHAT_|MODEL_INFO|message.complete" "$work/chat-after.txt" | cut -c1-300
+  check "streaming chat turn through /api/ws (stub Codex)" "$(grep -q '^CHAT_OK' "$work/chat-after.txt" && echo 1 || echo 0)"
+  echo "== stub requests:"; tail -n 8 "$work/stub.log"
+  check "no source-update message after sign-in + chat" "$(grep -qiE 'source-update|update is still running' "$log" && echo 0 || echo 1)"
+
+  if [ "${SMOKE_NET_CHECKS:-1}" = 1 ]; then
+    echo "== live Codex device-code start (real auth.openai.com, cancelled after the code)"
+    (sleep 40) | run /bin/bash -c 'timeout 30 /bin/bash /opt/hermes-local/bin/hermes-local-auth login codex' >"$work/codex.txt" 2>&1
+    cat "$work/codex.txt"
+    if grep -q '^HL_URL https://auth.openai.com/codex/device$' "$work/codex.txt" && grep -qE '^HL_CODE [A-Z0-9]{4,}-[A-Z0-9]{4,}$' "$work/codex.txt"; then
+      note "codex device code shown (URL + code parsed)"; else note "codex device code NOT captured"; fi
+    echo "== live agy sign-in start (real Google URL, no code entered)"
+    (sleep 60) | run /bin/bash -c 'HL_AGY_CODE_TIMEOUT=20 timeout 45 /bin/bash /opt/hermes-local/bin/hermes-local-auth login antigravity' >"$work/agy.txt" 2>&1
+    grep -vE '^HL_RAW' "$work/agy.txt" | cut -c1-200
+    if grep -q '^HL_URL https://accounts.google.com/' "$work/agy.txt" && grep -q '^HL_PROMPT code' "$work/agy.txt"; then
+      note "agy sign-in URL shown, waiting for the code"; else note "agy sign-in URL NOT captured"; fi
+    [ -n "$CAPTURE_DIR" ] && cp "$work/codex.txt" "$CAPTURE_DIR/codex-$MODE.txt" && cp "$work/agy.txt" "$CAPTURE_DIR/agy-$MODE.txt"
+  fi
+  [ -n "$CAPTURE_DIR" ] && cp "$work/chat-before.txt" "$CAPTURE_DIR/chat-before-$MODE.txt" && cp "$work/chat-after.txt" "$CAPTURE_DIR/chat-after-$MODE.txt" \
+    && cp "$log" "$CAPTURE_DIR/engine-$MODE.log"
+  echo "----- engine log tail ($MODE) -----"; tail -n 30 "$log"
 fi
 echo "SMOKE TEST ($MODE): $([ $rc = 0 ] && echo READY || echo NOT READY)"
 exit "$rc"
