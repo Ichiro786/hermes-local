@@ -139,7 +139,18 @@ in_root "hermes pm install --extra edge-tts </dev/null 2>&1 | grep -v '^ *$' | t
 # build: +104 MiB for edge-tts); pm gc drops generations and store entries nothing references.
 in_root "hermes pm gc </dev/null 2>&1 | tail -n 3" || echo "::warning::hermes pm gc failed"
 rm -rf "$ROOTFS/root/.cache"
-du -sh "$ROOTFS"/root/.hermes/* 2>/dev/null | sort -h | tail -n 6 || true
+du -sh "$ROOTFS"/root/.hermes/* "$ROOTFS"/root/.hermes/cache/* 2>/dev/null | sort -h | tail -n 8 || true
+# uv's wheel cache (~300 MB) is only a download cache: the dependency environments hold their own (hard-linked)
+# copies, and the packed tar stores hard links twice (--hard-dereference). Drop it unless something symlinks
+# into it; plugin installs on the phone download what they need.
+uvc="$ROOTFS/root/.hermes/cache/uv"
+if [ -d "$uvc" ]; then
+  if find "$ROOTFS/root/.hermes" "$ROOTFS/opt/hermes" -xdev -type l -lname '*/.hermes/cache/uv/*' -print -quit 2>/dev/null | grep -q .; then
+    echo "::warning::environments symlink into the uv cache; keeping it"
+  else
+    echo "dropping uv download cache: $(du -sh "$uvc" | cut -f1)"; rm -rf "$uvc"
+  fi
+fi
 size_edge=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
 in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap, edge_tts; print(\"edge-tts\", edge_tts.__version__)'"
 in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap, importlib.util as u; assert u.find_spec(\"faster_whisper\") is None, \"faster-whisper must not be installed\"; print(\"no faster-whisper: ok\")'"
@@ -165,11 +176,12 @@ for info in sorted(os.listdir(libs)):
     tops = set()
     for line in open(os.path.join(d, "RECORD"), encoding="utf-8"):
         top = line.split(",", 1)[0].split("/", 1)[0]
-        if top and not top.endswith((".dist-info", ".libs")) and top != "..":
+        if top and not top.endswith((".dist-info", ".libs")) and top not in ("..", "__pycache__"):
             tops.add(top[:-3] if top.endswith(".py") else top)
     if not tops or tops & keep_always:
         continue
-    if all(importlib.util.find_spec(t) is not None for t in tops if not t.startswith("_")):
+    mods = {t.split(".", 1)[0] for t in tops}  # _cffi_backend.cpython-314-....so -> _cffi_backend
+    if all(importlib.util.find_spec(m) is not None for m in mods):
         for t in tops:
             for cand in (os.path.join(libs, t), os.path.join(libs, t + ".py")):
                 if os.path.isdir(cand): shutil.rmtree(cand)
@@ -211,7 +223,7 @@ for kind in gemini codex; do
   mkdir -p "$OUT_DIR/captures-$ASSET_ARCH" && cp "$WORK_DIR/live-fake-$kind.txt" "$OUT_DIR/captures-$ASSET_ARCH/build-live-fake-$kind.txt"
   grep -q '^LIVE_RESULT ok' "$WORK_DIR/live-fake-$kind.txt" || fail "live bridge self-test ($kind) failed"
 done
-in_root "/bin/bash /opt/hermes-local/bin/hermes-py -I -c 'import sys; sys.path.append(\"/opt/hermes-local/live-libs\"); import aiortc, av; print(\"aiortc\", aiortc.__version__, \"av\", av.__version__)'" | tee "$WORK_DIR/live-versions.txt"
+in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import sys, hermes_bootstrap; sys.path.append(\"/opt/hermes-local/live-libs\"); import aiortc, av; print(\"aiortc\", aiortc.__version__, \"av\", av.__version__)'" | tee "$WORK_DIR/live-versions.txt"
 # Gemini TTS: Google's current models (gemini-3.8-flash[-lite]-tts) answer generateContent with a complete
 # WAV, while Hermes v0.23.0 always wraps the reply as raw PCM (WAV-in-WAV: a header-sized click). One-line
 # patch: keep a reply that already is RIFF/WAVE as it is. Fails the build if the upstream line moved.
