@@ -62,7 +62,7 @@ android {
         // (the only app path Android lets us exec since targetSdk 29) and keep them byte-for-byte.
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols += listOf("**/libproot.so", "**/libproot-loader.so", "**/libtalloc.so", "**/libandroid-shmem.so")
+            keepDebugSymbols += listOf("**/libproot.so", "**/libproot-loader.so", "**/libtalloc.so", "**/libandroid-shmem.so", "**/libemp*.so")
         }
     }
 

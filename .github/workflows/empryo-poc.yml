@@ -1,0 +1,109 @@
+name: Empryo PoC
+
+# Proof of concept for an "Empryo Local" app (branch empryo-poc only; never main):
+#   linux-arm64: Empryo (dl.empryo.com latest, linux-arm64) native, patchelf'd onto a private glibc
+#                ("no proot"), and in termux/proot on a minbase / tiny glibc rootfs, each also under an
+#                approximation of Android's app seccomp policy. Measures start time, RSS, idle CPU,
+#                context switches, disk.
+#   emulator:    API 36 x86_64 emulator, inside a CI build of Hermes Local from this branch: Empryo in the
+#                Hermes rootfs through the app's proot, and in the bare app process (W^X, seccomp,
+#                proot-lite).
+# Evidence: artifacts empryo-poc-linux-arm64 and empryo-poc-emulator (checks.txt, metrics.txt, logs).
+
+on:
+  push:
+    branches: [empryo-poc]
+    paths:
+      - "scripts/empryo-poc/**"
+      - ".github/workflows/empryo-poc.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: empryo-poc
+  cancel-in-progress: true
+
+jobs:
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends debootstrap patchelf strace libtalloc-dev gawk xz-utils binutils gcc make curl ca-certificates git python3
+          uname -a; nproc; free -m; ls -l /dev/kvm 2>&1 || true
+      - name: PoC
+        run: bash scripts/empryo-poc/linux.sh out-arm64
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: empryo-poc-linux-arm64
+          path: out-arm64/
+
+  emulator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ENGINE_TAG: engine-v0.23.0-3
+    steps:
+      - uses: actions/checkout@v4
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: android-actions/setup-android@v3
+        with: { packages: "platforms;android-37.0 build-tools;37.0.0 platform-tools" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "9.8.2" }
+      - run: sudo apt-get install -y --no-install-recommends patchelf
+      - name: Engine payload (x86_64)
+        run: |
+          mkdir -p engine-dl
+          gh release download "$ENGINE_TAG" --repo "$GITHUB_REPOSITORY" -D engine-dl -p 'rootfs-x86_64.tar.xz*'
+      - name: Empryo x64 + no-proot jniLibs (libempryo.so with PT_INTERP in the app's files dir, glibc as libemp_*.so)
+        run: |
+          set -euo pipefail
+          V=$(curl -fsSL https://dl.empryo.com/latest.txt | tr -d '[:space:]'); B=empryo-$V-linux-x64-baseline
+          mkdir -p emp jni
+          curl -fsSL -o emp/$B.tar.gz https://dl.empryo.com/v$V/$B.tar.gz
+          curl -fsSL -o emp/SHA256SUMS.txt https://dl.empryo.com/v$V/SHA256SUMS.txt
+          (cd emp && grep "  $B.tar.gz\$" SHA256SUMS.txt | sha256sum -c -)
+          tar -C emp -xzf emp/$B.tar.gz
+          cp emp/$B/empryo jni/libempryo.so
+          patchelf --set-interpreter /data/data/dev.syed.hermeslocal/files/eg/ld-linux-x86-64.so.2 \
+                   --set-rpath /data/data/dev.syed.hermeslocal/files/eg jni/libempryo.so
+          cp -L /lib64/ld-linux-x86-64.so.2 jni/libemp_ld.so
+          for l in c:libc.so.6 m:libm.so.6 dl:libdl.so.2 pthread:libpthread.so.0 rt:librt.so.1 gcc_s:libgcc_s.so.1; do
+            cp -L /lib/x86_64-linux-gnu/${l#*:} jni/libemp_${l%%:*}.so; done
+          ls -l jni; echo "TB=$PWD/emp/$B.tar.gz" >>"$GITHUB_ENV"
+      - name: Build x86_64 CI APK (debug key, CI hooks, Empryo jniLibs)
+        env:
+          ENGINE_DIR: engine-dl
+          ABI: x86_64
+          GRADLE: gradle
+          GRADLE_ARGS: -PciHooks=true
+          EXTRA_JNI_DIR: jni
+        run: bash scripts/build-apk.sh && ls -l out/ && unzip -l out/*.apk | grep -E 'lib/x86_64/'
+      - name: Emulator PoC
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          profile: pixel_7
+          ram-size: 6144M
+          disk-size: 14G
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: bash scripts/empryo-poc/emulator.sh out/hermes-local-1.0.0-x86_64.apk emu "$TB"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: empryo-poc-emulator
+          path: emu/

@@ -15,6 +15,8 @@ VERSION_CODE=${VERSION_CODE:-1}
 GRADLE=${GRADLE:-gradle}
 
 ABI=$ABI bash "$ROOT/scripts/fetch-proot.sh"
+# empryo-poc: extra executables/libraries (lib*.so) to ship in nativeLibraryDir for the no-proot test.
+if [ -n "${EXTRA_JNI_DIR:-}" ]; then cp "$EXTRA_JNI_DIR"/lib*.so "$ROOT/android/app/src/main/jniLibs/$ABI/" && ls -l "$ROOT/android/app/src/main/jniLibs/$ABI/"; fi
 
 assets="$ROOT/android/app/src/main/assets/engine"
 rm -rf "$assets"; mkdir -p "$assets"

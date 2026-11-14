@@ -64,6 +64,19 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.i("HermesLocalCI", "guest-exit: ${r.exitCode}")
             }
         }
+        // empryo-poc branch only: `-e ci_host '<sh>'` runs /system/bin/sh in the app process itself (untrusted_app
+        // domain + app seccomp, no proot) with NLD=nativeLibraryDir, FILES=filesDir, CACHE=cacheDir; logs "host: ".
+        intent.getStringExtra("ci_host")?.let { cmd ->
+            AppController.scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val pb = ProcessBuilder("/system/bin/sh", "-c", cmd).redirectErrorStream(true)
+                pb.environment()["NLD"] = applicationInfo.nativeLibraryDir
+                pb.environment()["FILES"] = filesDir.absolutePath
+                pb.environment()["CACHE"] = cacheDir.absolutePath
+                val p = pb.start()
+                p.inputStream.bufferedReader().forEachLine { android.util.Log.i("HermesLocalCI", "host: $it") }
+                android.util.Log.i("HermesLocalCI", "host-exit: ${p.waitFor()}")
+            }
+        }
         val pw = intent.getStringExtra("ci_password")
         val toggle = if (intent.hasExtra("ci_toggle")) intent.getBooleanExtra("ci_toggle", false) else null
         AppController.scope.launch {
