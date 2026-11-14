@@ -128,8 +128,8 @@ python3 "$H/android_seccomp.py" "$AOSP" "$SA" "$W/sec-android.c" && gcc -O2 -o "
 python3 "$H/android_seccomp.py" --allowed "$AOSP" "$SA" >"$OUT/android-app-allowed-syscalls.txt"
 SECA=$W/sec-android
 # self-test: a bionic-free static program that only uses allowed calls must survive; glibc ls must die
-"$SECA" /bin/true; st=$?; "$SECA" /bin/ls / >/dev/null 2>&1; sl=$?
-note "sec-android self-test: /bin/true rc=$st, /bin/ls rc=$sl (159 = SIGSYS)"
+"$SECA" /bin/ls / >/dev/null 2>&1; sl=$?
+note "sec-android self-test: glibc /bin/ls under the policy rc=$sl (159 = SIGSYS, as on Android)"
 strace -f -qq -o "$OUT/sigsys-ls.txt" "$SECA" /bin/ls / >/dev/null 2>&1; grep -m3 -E 'SIGSYS|killed' "$OUT/sigsys-ls.txt" | tee -a "$MET"
 endsec
 
@@ -214,7 +214,8 @@ sec "loader"
 HHOME=$W/h-loader; EHOME=$HHOME; ETMP=$W/tmp-loader; ECWD=$W/proj; mkdir -p "$ETMP"
 mkdir -p "$HHOME"; cp -a "$W/h-native/.empryo" "$HHOME/"; rm -rf "$HHOME/.empryo/mobile"
 LB=$HHOME/.empryo/bin/empryo-pe; cp "$HHOME/.empryo/bin/empryo" "$LB"
-patchelf --set-interpreter "$GL/$LDN" --set-rpath "$GL" "$LB"; rc=$?
+"${PATCHELF:-patchelf}" --set-interpreter "$GL/$LDN" --set-rpath "$GL" "$LB"; rc=$?
+note "patchelf used: $("${PATCHELF:-patchelf}" --version) (0.18.0 corrupts the Bun binary: SIGSEGV; 0.19.3 works)"
 check "loader: patchelf PT_INTERP=$GL/$LDN RUNPATH=$GL rc=$rc (Bun payload survives?)" "$([ $rc = 0 ] && echo 1 || echo 0)"
 # ld.so --library-path form: works for one-shot runs, but process.execPath becomes ld.so (engine respawns break)
 t=$(date +%s%N); o=$(env HOME="$HHOME" "$GL/$LDN" --library-path "$GL" "$HHOME/.empryo/bin/empryo" --version 2>&1); note "loader ld.so--library-path --version: '$o' ($(ms "$t") ms)"

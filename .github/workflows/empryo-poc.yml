@@ -36,7 +36,11 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends debootstrap patchelf strace libtalloc-dev gawk xz-utils binutils gcc make curl ca-certificates git python3
           uname -a; nproc; free -m; ls -l /dev/kvm 2>&1 || true
+          # apt's patchelf 0.18.0 breaks Bun single-file binaries (SIGSEGV); 0.19.3 keeps them working
+          python3 -m venv "$RUNNER_TEMP/pv" && "$RUNNER_TEMP/pv/bin/pip" install -q patchelf==0.19.3
       - name: PoC
+        env:
+          PATCHELF: ${{ runner.temp }}/pv/bin/patchelf
         run: bash scripts/empryo-poc/linux.sh out-arm64
       - uses: actions/upload-artifact@v4
         if: always()
@@ -62,7 +66,10 @@ jobs:
         with: { packages: "platforms;android-37.0 build-tools;37.0.0 platform-tools" }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "9.8.2" }
-      - run: sudo apt-get install -y --no-install-recommends patchelf
+      - name: patchelf (apt's 0.18.0 for build-apk/fetch-proot; 0.19.3 for the Bun binary)
+        run: |
+          sudo apt-get install -y --no-install-recommends patchelf
+          python3 -m venv "$RUNNER_TEMP/pv" && "$RUNNER_TEMP/pv/bin/pip" install -q patchelf==0.19.3
       - name: Engine payload (x86_64)
         run: |
           mkdir -p engine-dl
@@ -77,11 +84,13 @@ jobs:
           (cd emp && grep "  $B.tar.gz\$" SHA256SUMS.txt | sha256sum -c -)
           tar -C emp -xzf emp/$B.tar.gz
           cp emp/$B/empryo jni/libempryo.so
-          patchelf --set-interpreter /data/data/dev.syed.hermeslocal/files/eg/ld-linux-x86-64.so.2 \
+          "$RUNNER_TEMP/pv/bin/patchelf" --set-interpreter /data/data/dev.syed.hermeslocal/files/eg/ld-linux-x86-64.so.2 \
                    --set-rpath /data/data/dev.syed.hermeslocal/files/eg jni/libempryo.so
           cp -L /lib64/ld-linux-x86-64.so.2 jni/libemp_ld.so
           for l in c:libc.so.6 m:libm.so.6 dl:libdl.so.2 pthread:libpthread.so.0 rt:librt.so.1 gcc_s:libgcc_s.so.1; do
             cp -L /lib/x86_64-linux-gnu/${l#*:} jni/libemp_${l%%:*}.so; done
+          # sanity: the patched binary still runs on the CI host through its own ld.so
+          /lib64/ld-linux-x86-64.so.2 --library-path /lib/x86_64-linux-gnu jni/libempryo.so --version
           ls -l jni; echo "TB=$PWD/emp/$B.tar.gz" >>"$GITHUB_ENV"
       - name: Build x86_64 CI APK (debug key, CI hooks, Empryo jniLibs)
         env:

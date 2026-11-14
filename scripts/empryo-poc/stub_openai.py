@@ -31,7 +31,12 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"object": "list", "data": [{"id": "stub-1", "object": "model", "owned_by": "stub"}]})
         self._send(404, {"error": "nope"})
     def do_POST(self):
-        n = int(self.headers.get("content-length", 0)); body = json.loads(self.rfile.read(n) or b"{}")
+        n = int(self.headers.get("content-length", 0)); raw = self.rfile.read(n)
+        enc = (self.headers.get("content-encoding") or "identity").lower()
+        if enc != "identity":  # Empryo compresses requests to non-local hosts; a refusal makes it resend plain
+            LOG.write(f"POST {self.path} refused content-encoding={enc}\n")
+            return self._send(415, {"error": {"message": f"unsupported content-encoding {enc}"}})
+        body = json.loads(raw or b"{}")
         msgs = body.get("messages", []); tools = body.get("tools", [])
         names = [ (t.get("function", t)).get("name") for t in tools ]
         has_tool_result = any(m.get("role") == "tool" for m in msgs)

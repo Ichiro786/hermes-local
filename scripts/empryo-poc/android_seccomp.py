@@ -32,7 +32,8 @@ def parse(path, arch):
         if not (tags & ARCH_TAGS[arch]):
             continue
         tok = head.split()[-1]
-        names = tok.split(":", 1)[1] if ":" in tok else tok
+        # "fn1|fn2:sys1,sys2" -> syscalls after ':'; "fn1|fn2" -> the syscall is named like fn1
+        names = tok.split(":", 1)[1] if ":" in tok else tok.split("|")[0]
         for n in names.split(","):
             n = n.strip("*").strip()
             if n:
