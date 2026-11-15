@@ -108,20 +108,15 @@ object Diagnostics {
         }
     }
 
-    /** One bridge start with proot's link2symlink, and if that dies on its socket hard link, one without. */
     private suspend fun bridgeTest(paths: Paths, s: SettingsSnapshot) {
-        val first = bridgeOnce(paths, s, link2symlink = true)
-        if (!first && File(paths.empryoHome, "mobile").exists()) {
-            out("\n-- again without link2symlink (real hard links for the control socket)")
-            bridgeOnce(paths, s, link2symlink = false)
-        }
+        if (!bridgeOnce(paths, s)) out("why: phone-service hard-links its control socket; Android denies hard links and proot's link2symlink can't fake one for a socket")
     }
 
-    private suspend fun bridgeOnce(paths: Paths, s: SettingsSnapshot, link2symlink: Boolean): Boolean {
+    private suspend fun bridgeOnce(paths: Paths, s: SettingsSnapshot): Boolean {
         val via = if (s.lanAccess) "wifi" else "local"
-        out("argv: phone-service --cwd ${Paths.WORKSPACE} --login-item --via $via (remotePort ${s.bridgePort}, link2symlink=$link2symlink)")
+        out("argv: phone-service --cwd ${Paths.WORKSPACE} --login-item --via $via (remotePort ${s.bridgePort})")
         val lines = StringBuilder()
-        val p = Proot.processBuilder(paths, listOf(Paths.EMPRYO, "phone-service", "--cwd", Paths.WORKSPACE, "--login-item", "--via", via), link2symlink = link2symlink).start()
+        val p = Proot.processBuilder(paths, listOf(Paths.EMPRYO, "phone-service", "--cwd", Paths.WORKSPACE, "--login-item", "--via", via)).start()
         p.outputStream.close()
         val reader = Thread { runCatching { p.inputStream.bufferedReader().forEachLine { synchronized(lines) { lines.appendLine(it) } } } }.apply { isDaemon = true; start() }
         val t0 = System.currentTimeMillis()

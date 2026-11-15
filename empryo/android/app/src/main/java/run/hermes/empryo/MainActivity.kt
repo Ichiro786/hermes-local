@@ -82,10 +82,9 @@ class MainActivity : ComponentActivity() {
         val s = AppController.scope
         intent.getStringExtra("ci_screen")?.let { n -> Screen.entries.firstOrNull { it.name.equals(n, true) }?.let { ciScreen.value = it } }
         intent.getStringExtra("ci_guest")?.let { cmd ->
-            val l2s = !intent.getBooleanExtra("ci_nol2s", false)
             s.launch {
                 EngineState.status.first { it.phase != Phase.Installing && it.phase != Phase.NotInstalled }
-                val r = AppController.runner.run(listOf("/bin/sh", "-c", cmd), 600, l2s)
+                val r = AppController.runner.run(listOf("/bin/sh", "-c", cmd), 600)
                 r.output.lines().forEach { Log.i(TAG, "guest: $it") }
                 Log.i(TAG, "guest-exit: ${r.exitCode}")
             }
@@ -97,9 +96,10 @@ class MainActivity : ComponentActivity() {
                     val job = launch { Pairing.ui.collect { u -> Log.i(TAG, "pair: state=${u.state} code=${u.code != null} qr=${u.qr.size} reaches=${u.reaches} msg=${u.message}") } }
                     AppController.setPairing(true)
                     Pairing.setVisible(true)
-                    val u = withContext(Dispatchers.IO) { kotlinx.coroutines.withTimeoutOrNull(120_000) { Pairing.ui.first { it.code != null && it.qr.isNotEmpty() } } }
+                    val u = withContext(Dispatchers.IO) { kotlinx.coroutines.withTimeoutOrNull(120_000) { Pairing.ui.first { (it.code != null && it.qr.isNotEmpty()) || it.state == "failed" } } }
                     job.cancel()
-                    Log.i(TAG, "pair-ready: ${u != null} link=${u?.link} reaches=${u?.reaches} qr=${u?.qr?.size} bridge=${EngineState.status.value.bridge}")
+                    Log.i(TAG, "pair-ready: ${u?.code != null} link=${u?.link} reaches=${u?.reaches} qr=${u?.qr?.size} bridge=${EngineState.status.value.bridge}")
+                    Log.i(TAG, "pair-state: ${u?.state} msg=${u?.message?.replace('\n', ' ')}")
                 } else AppController.setPairing(false)
             }
         }

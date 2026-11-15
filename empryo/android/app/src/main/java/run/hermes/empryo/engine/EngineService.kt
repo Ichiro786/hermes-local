@@ -163,8 +163,9 @@ class EngineService : Service() {
     /**
      * The official Empryo app's bridge: `empryo phone-service --login-item` (never `empryo phone on`, which needs
      * systemd and copies 368 MB), plus the pairing helper attached to its control socket (see [Pairing]).
-     * phone-service hard-links its control socket; if proot's link2symlink emulation breaks that ("reclaimed-stale" /
-     * "lost-link" on the x86_64 emulator in test1) it retries once with real hard links and remembers what worked.
+     * Known blocker (test2 emulator): phone-service listens on a private socket and hard-links it to its public
+     * name. Android denies apps hard links (EACCES) and proot's link2symlink fake leaves a socket link nothing can
+     * stat or connect to, so phone-service loops "lost-link"/"reclaimed-stale" and exits. Reported in the Pair screen.
      */
     private suspend fun runBridge(port: Int) {
         if (bridge != null) return
@@ -172,51 +173,35 @@ class EngineService : Service() {
         val via = if (settings.value.lanAccess) "auto" else "quick"
         EngineState.set { it.copy(bridge = "Starting on :$port") }
         Pairing.setState("starting")
-        var l2s = prefs(this).getBoolean(PREF_BRIDGE_L2S, true)
-        var code = -1
-        var last = ""
-        var attempt = 0
         bridgeStopRequested = false
-        while (true) {
-            attempt++
-            val p = try {
-                Proot.processBuilder(paths, listOf(Paths.EMPRYO, "phone-service", "--cwd", Paths.WORKSPACE, "--login-item", "--via", via), link2symlink = l2s).start()
-            } catch (e: Exception) {
-                EngineState.set { it.copy(bridge = "Could not start: ${e.message}") }; Pairing.setState("failed", e.message); return
-            }
-            bridge = p
-            bridgePid = p.pidCompat()
-            p.outputStream.close()
-            log("bridge: phone-service --via $via (link2symlink=$l2s)")
-            val t0 = System.currentTimeMillis()
-            val tail = ArrayDeque<String>()
-            Thread({ p.inputStream.bufferedReader().forEachLine { l -> synchronized(tail) { tail.addLast(l); if (tail.size > 20) tail.removeFirst() }; log("bridge: $l") } }, "bridge").apply { isDaemon = true }.start()
-            val helper = scope.launch { runPairHelper(p) }
-            scope.launch {
-                repeat(30) {
-                    if (bridge !== p) return@launch
-                    val open = (port..port + 3).firstOrNull { portOpen(it) }
-                    if (open != null) { EngineState.set { it.copy(bridge = "Running on :$open (${if (via == "quick") "quick link" else "Wi-Fi + quick link"})") }; return@launch }
-                    delay(1000)
-                }
-            }
-            code = try { p.waitFor() } catch (_: InterruptedException) { -1 }
-            helper.cancel()
-            last = synchronized(tail) { tail.lastOrNull() ?: "no output" }
-            val linkTrouble = listOf("reclaim", "lost-link", "hardlink", "is taken").any { last.contains(it) }
-            if (!stopping && bridge === p && attempt == 1 && linkTrouble && System.currentTimeMillis() - t0 < 30_000) {
-                l2s = !l2s
-                log("bridge: exited ($code) \"$last\"; retrying with link2symlink=$l2s")
-                continue
-            }
-            if (!stopping && bridge === p && attempt == 2 && code != 0) l2s = !l2s // neither worked: keep the default
-            break
+        val p = try {
+            Proot.processBuilder(paths, listOf(Paths.EMPRYO, "phone-service", "--cwd", Paths.WORKSPACE, "--login-item", "--via", via)).start()
+        } catch (e: Exception) {
+            EngineState.set { it.copy(bridge = "Could not start: ${e.message}") }; Pairing.setState("failed", e.message); return
         }
-        prefs(this).edit().putBoolean(PREF_BRIDGE_L2S, l2s).apply()
+        bridge = p
+        bridgePid = p.pidCompat()
+        p.outputStream.close()
+        log("bridge: phone-service --via $via")
+        val tail = ArrayDeque<String>()
+        Thread({ p.inputStream.bufferedReader().forEachLine { l -> synchronized(tail) { tail.addLast(l); if (tail.size > 20) tail.removeFirst() }; log("bridge: $l") } }, "bridge").apply { isDaemon = true }.start()
+        val helper = scope.launch { runPairHelper(p) }
+        scope.launch {
+            repeat(30) {
+                if (bridge !== p) return@launch
+                val open = (port..port + 3).firstOrNull { portOpen(it) }
+                if (open != null) { EngineState.set { it.copy(bridge = "Running on :$open (${if (via == "quick") "quick link" else "Wi-Fi + quick link"})") }; return@launch }
+                delay(1000)
+            }
+        }
+        val code = try { p.waitFor() } catch (_: InterruptedException) { -1 }
+        helper.cancel()
+        val last = synchronized(tail) { tail.lastOrNull() ?: "no output" }
         bridge = null; bridgePid = null
         releaseMulticast()
-        Pairing.setState("off")
-        if (!stopping && !bridgeStopRequested) EngineState.set { it.copy(bridge = "Exited ($code): $last") }
+        if (stopping || bridgeStopRequested) { Pairing.setState("off"); return }
+        EngineState.set { it.copy(bridge = "Exited ($code): $last") }
+        Pairing.setState("failed", Pairing.explainExit(code, last))
     }
 
     /** Keeps the pairing helper attached while phone-service runs (it exits until service.json and the socket exist). */
@@ -366,7 +351,6 @@ class EngineService : Service() {
         const val ACTION_STOP = "run.hermes.empryo.STOP"
         const val ACTION_BRIDGE = "run.hermes.empryo.BRIDGE"
         const val ACTION_BRIDGE_STOP = "run.hermes.empryo.BRIDGE_STOP"
-        private const val PREF_BRIDGE_L2S = "bridge_link2symlink"
         private const val CHANNEL_ID = "engine"
         private const val NOTIFICATION_ID = 7
         private const val PAIR_CHANNEL_ID = "pairing"

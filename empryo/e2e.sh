@@ -72,13 +72,10 @@ check "dns GREEN: app resolv.conf -> Bun HTTPS fetch OK inside the engine" "$(gr
 
 # ---- phone-service control socket: listen + hard link + connect (what phone-service does), with and without link2symlink.
 pjs=$(printf '%s' 'const net=require("net"),fs=require("fs");const a="/tmp/lp-a.sock",b="/tmp/lp-b.sock";const rm=()=>{for(const p of [a,b])try{fs.unlinkSync(p)}catch{}};rm();const s=net.createServer(c=>c.end("hi"));const done=()=>{s.close();rm();process.exit(0)};s.listen(a,()=>{try{fs.linkSync(a,b);console.log("LINK_OK")}catch(e){console.log("LINK_ERR",e.code,e.message)}try{const x=fs.statSync(a).ino,y=fs.statSync(b).ino;console.log("INO",x===y?"SAME":"DIFF",x,y,"sym",fs.lstatSync(a).isSymbolicLink(),fs.lstatSync(b).isSymbolicLink())}catch(e){console.log("STAT_ERR",e.code)}const c=net.connect(b);c.on("data",()=>{console.log("CONNECT_B_OK");done()});c.on("error",e=>{console.log("CONNECT_B_ERR",e.code);done()})});setTimeout(()=>{console.log("PROBE_TIMEOUT");process.exit(1)},10000)' | base64 -w0)
-for mode in l2s nol2s; do
-  adb logcat -c 2>/dev/null; sleep 1
-  extra=""; [ $mode = nol2s ] && extra="--ez ci_nol2s true"
-  am_app $extra -e ci_guest "'echo $pjs | base64 -d > /tmp/lp.js && BUN_BE_BUN=1 /opt/empryo/empryo /tmp/lp.js'"
-  wait_log "guest-exit" 60; ci_log | grep "guest:" | tee "$OUT/socklink-$mode.txt"
-  note "socket link probe ($mode): $(grep -oE 'LINK_[A-Z]+.*|INO .*|CONNECT_B_[A-Z]+.*|PROBE_TIMEOUT' "$OUT/socklink-$mode.txt" | tr '\n' ' ')"
-done
+adb logcat -c 2>/dev/null; sleep 1
+am_app -e ci_guest "'echo $pjs | base64 -d > /tmp/lp.js && BUN_BE_BUN=1 /opt/empryo/empryo /tmp/lp.js'"
+wait_log "guest-exit" 60; ci_log | grep "guest:" | tee "$OUT/socklink.txt"
+note "socket hard-link probe (proot link2symlink): $(grep -oE 'LINK_[A-Z]+.*|INO .*|STAT_ERR.*|CONNECT_B_[A-Z]+.*|PROBE_TIMEOUT' "$OUT/socklink.txt" | tr '\n' ' ')"
 
 adb logcat -c 2>/dev/null; sleep 1
 am_app --ez ci_diag true
@@ -120,11 +117,15 @@ adb logcat -c 2>/dev/null; sleep 1
 am_app --ez ci_pair true
 if wait_log "pair-ready: (true|false)" 200; then :; fi
 ci_log | grep -E "pair" | tail -40 | tee "$OUT/pair.txt"
-check "pair: phone-service + helper gave a code, link and QR" "$(grep -q 'pair-ready: true link=empryo://pair?c=' "$OUT/pair.txt" && echo 1 || echo 0)"
-check "pair: QR matrix received" "$(grep -q 'pair-ready: true.*qr=[1-9]' "$OUT/pair.txt" && echo 1 || echo 0)"
+if grep -q 'pair-ready: true' "$OUT/pair.txt"; then
+  check "pair: phone-service + helper gave a code, link and QR" "$(grep -q 'pair-ready: true link=empryo://pair?c=' "$OUT/pair.txt" && echo 1 || echo 0)"
+  check "pair: QR matrix received" "$(grep -q 'pair-ready: true.*qr=[1-9]' "$OUT/pair.txt" && echo 1 || echo 0)"
+else
+  note "PAIRING BLOCKED on this device: $(grep -m1 -o 'bridge=Exited[^|]*' "$OUT/pair.txt")"
+  check "pair: blocker shown in the Pair screen with its reason (hard link)" "$(grep -q 'pair-state: failed msg=.*hard-links it' "$OUT/pair.txt" && echo 1 || echo 0)"
+fi
 note "pair reaches: $(grep -m1 -o 'reaches=\[[^]]*\]' "$OUT/pair.txt" | tail -1)"
 adb shell run-as $PKG sh -c "'grep -E \"bridge|pair\" files/logs/engine.log | tail -40'" >"$OUT/pair-engine.log" 2>&1
-note "bridge mode: $(grep -m1 -o 'link2symlink=[a-z]*' "$OUT/pair-engine.log" | tail -1) $(grep -c 'retrying with link2symlink' "$OUT/pair-engine.log") retries"
 am_app -e ci_screen pair; sleep 4; shot "30-pair"
 am_app -e ci_pair_request "'Syed iPhone'"; sleep 3; shot "31-pair-request"
 adb shell input keyevent KEYCODE_BACK; sleep 1

@@ -44,13 +44,11 @@ object Proot {
         "BUN_FEATURE_FLAG_NO_ORPHANS" to "1",
     ).apply { putAll(extra) }
 
-    /** [link2symlink] false: real hard links (phone-service links its control socket; see EngineService.runBridge). */
-    fun argv(paths: Paths, guestArgv: List<String>, env: Map<String, String>, link2symlink: Boolean = true): List<String> {
+    fun argv(paths: Paths, guestArgv: List<String>, env: Map<String, String>): List<String> {
         val r = paths.rootfs.absolutePath
-        val args = mutableListOf(paths.proot.absolutePath, "--kill-on-exit")
-        if (link2symlink) args += "--link2symlink"
-        args += listOf(
-            "--sysvipc", "-0", "-L",
+        val args = mutableListOf(
+            paths.proot.absolutePath,
+            "--kill-on-exit", "--link2symlink", "--sysvipc", "-0", "-L",
             "-r", r, "-w", "/root",
             "-b", "/dev", "-b", "/proc", "-b", "/sys",
             "-b", "/dev/urandom:/dev/random",
@@ -83,11 +81,11 @@ object Proot {
 
     /** stderr is merged into stdout unless [splitStderr] (ACP: stdout is the JSON-RPC channel). */
     fun processBuilder(
-        paths: Paths, guestArgv: List<String>, splitStderr: Boolean = false, extraEnv: Map<String, String> = emptyMap(), link2symlink: Boolean = true,
+        paths: Paths, guestArgv: List<String>, splitStderr: Boolean = false, extraEnv: Map<String, String> = emptyMap(),
     ): ProcessBuilder {
         paths.ensureDirs()
         GuestSetup.apply(paths)
-        val pb = ProcessBuilder(argv(paths, guestArgv, guestEnv(extraEnv), link2symlink))
+        val pb = ProcessBuilder(argv(paths, guestArgv, guestEnv(extraEnv)))
             .directory(paths.rootfs)
             .redirectErrorStream(!splitStderr)
         val env = pb.environment()

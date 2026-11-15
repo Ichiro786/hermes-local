@@ -12,10 +12,10 @@ class Runner(context: Context) {
 
     data class Result(val exitCode: Int, val output: String, val ms: Long)
 
-    suspend fun run(argv: List<String>, timeoutSec: Long = 120, link2symlink: Boolean = true): Result = withContext(Dispatchers.IO) {
+    suspend fun run(argv: List<String>, timeoutSec: Long = 120): Result = withContext(Dispatchers.IO) {
         val t0 = System.nanoTime()
         Proot.preflight(paths)?.let { return@withContext Result(-1, it, 0) }
-        val p = Proot.processBuilder(paths, argv, link2symlink = link2symlink).start()
+        val p = Proot.processBuilder(paths, argv).start()
         p.outputStream.close()
         val output = StringBuilder()
         val reader = Thread { p.inputStream.bufferedReader().forEachLine { synchronized(output) { output.appendLine(it) } } }
