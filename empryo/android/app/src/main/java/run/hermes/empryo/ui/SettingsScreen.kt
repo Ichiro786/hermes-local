@@ -32,6 +32,9 @@ import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Contrast
+import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material.icons.rounded.ViewInAr
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalIconButton
@@ -96,15 +99,30 @@ fun SettingsScreen(
                 Divider()
                 SwitchRow(
                     Icons.Rounded.Hub, "LAN access",
-                    if (settings.lanAccess) "The pairing bridge may listen on Wi-Fi" else "Off: nothing listens on Wi-Fi",
+                    if (settings.lanAccess) "Pairing may also listen on Wi-Fi" else "Off: pairing uses the quick link only",
                     settings.lanAccess,
-                ) { v -> onUpdate { copy(lanAccess = v, pairOfficial = pairOfficial && v) } }
+                ) { v -> onUpdate { copy(lanAccess = v) } }
                 Divider()
+                NavRow(
+                    Icons.Rounded.PhoneAndroid, "Pair Empryo app",
+                    if (settings.pairOfficial) "On · QR, link and Allow requests" else "Off · use the official Empryo app with this phone",
+                ) { onNavigate(Screen.Pair) }
+            }
+
+            SectionChip(Icons.Rounded.Palette, "APPEARANCE")
+            Group {
                 SwitchRow(
-                    Icons.Rounded.PhoneAndroid, "Pair official Empryo app",
-                    if (settings.lanAccess) "Experimental · runs phone-service over Wi-Fi" else "Experimental · turn on LAN access first",
-                    settings.pairOfficial, enabled = settings.lanAccess,
-                ) { v -> onUpdate { copy(pairOfficial = v) } }
+                    Icons.Rounded.Contrast, "Theme: AMOLED black",
+                    if (settings.amoled) "Pure black background, cards slightly lifted" else "Off: Dark",
+                    settings.amoled,
+                ) { v -> onUpdate { copy(amoled = v) } }
+                Divider()
+                val canDynamic = android.os.Build.VERSION.SDK_INT >= 31
+                SwitchRow(
+                    Icons.Rounded.Wallpaper, "Wallpaper colours (Material You)",
+                    if (!canDynamic) "Needs Android 12 or newer" else if (settings.dynamicColor) "Colours follow your wallpaper" else "Off: lavender",
+                    settings.dynamicColor && canDynamic, enabled = canDynamic,
+                ) { v -> onUpdate { copy(dynamicColor = v) } }
             }
 
             SectionChip(Icons.Rounded.Shield, "ACCOUNTS")

@@ -68,6 +68,12 @@ object Diagnostics {
             section("empryo doctor")
             runner.run(listOf(Paths.EMPRYO, "doctor"), 180).let { out("rc=${it.exitCode} ${it.ms} ms\n${it.output.trim()}") }
 
+            section("network inside the engine (DNS + HTTPS from Bun, like sign-in and chat)")
+            out("Android DNS servers (active network): ${GuestSetup.networkDns(context).ifEmpty { listOf("none") }.joinToString(" ")}")
+            File(paths.rootfs, NETCHECK.removePrefix("/")).apply { parentFile?.mkdirs(); writeText(NETCHECK_JS) }
+            runner.run(listOf("/bin/sh", "-c", "grep -v '^#' /etc/resolv.conf; getent ahostsv4 api.anthropic.com | head -1 || echo 'getent: no answer'; /usr/bin/env BUN_BE_BUN=1 ${Paths.EMPRYO} $NETCHECK"), 120)
+                .let { out("rc=${it.exitCode} ${it.ms} ms\n${it.output.trim()}") }
+
             section("mkdir probe (PoC blocker: background.json.lock ENOENT)")
             runner.run(listOf("/bin/sh", "-c", "mkdir -p /root/.empryo/mobile && mkdir /root/.empryo/mobile/diag.lock && echo MKDIR_OK; rmdir /root/.empryo/mobile/diag.lock; ls -la /root/.empryo/mobile"), 60)
                 .let { out("rc=${it.exitCode}\n${it.output.trim()}") }
@@ -102,11 +108,20 @@ object Diagnostics {
         }
     }
 
+    /** One bridge start with proot's link2symlink, and if that dies on its socket hard link, one without. */
     private suspend fun bridgeTest(paths: Paths, s: SettingsSnapshot) {
+        val first = bridgeOnce(paths, s, link2symlink = true)
+        if (!first && File(paths.empryoHome, "mobile").exists()) {
+            out("\n-- again without link2symlink (real hard links for the control socket)")
+            bridgeOnce(paths, s, link2symlink = false)
+        }
+    }
+
+    private suspend fun bridgeOnce(paths: Paths, s: SettingsSnapshot, link2symlink: Boolean): Boolean {
         val via = if (s.lanAccess) "wifi" else "local"
-        out("argv: phone-service --cwd ${Paths.WORKSPACE} --login-item --via $via (remotePort ${s.bridgePort})")
+        out("argv: phone-service --cwd ${Paths.WORKSPACE} --login-item --via $via (remotePort ${s.bridgePort}, link2symlink=$link2symlink)")
         val lines = StringBuilder()
-        val p = Proot.processBuilder(paths, listOf(Paths.EMPRYO, "phone-service", "--cwd", Paths.WORKSPACE, "--login-item", "--via", via)).start()
+        val p = Proot.processBuilder(paths, listOf(Paths.EMPRYO, "phone-service", "--cwd", Paths.WORKSPACE, "--login-item", "--via", via), link2symlink = link2symlink).start()
         p.outputStream.close()
         val reader = Thread { runCatching { p.inputStream.bufferedReader().forEachLine { synchronized(lines) { lines.appendLine(it) } } } }.apply { isDaemon = true; start() }
         val t0 = System.currentTimeMillis()
@@ -126,7 +141,17 @@ object Diagnostics {
         p.terminate(4000)
         reader.join(2000)
         out("phone-service output:\n" + synchronized(lines) { lines.toString() }.trim().ifEmpty { "(none)" })
+        return openPort != null
     }
+
+    private const val NETCHECK = "/opt/empryo-local/netcheck.js"
+    private val NETCHECK_JS = """
+        for (const u of ["https://api.anthropic.com/", "https://chatgpt.com/", "https://dl.empryo.com/latest.txt"]) {
+          const t = Date.now(), h = new URL(u).host;
+          try { const r = await fetch(u, { signal: AbortSignal.timeout(25000) }); console.log(`NET_OK ${'$'}{h} http ${'$'}{r.status} ${'$'}{Date.now() - t} ms`); }
+          catch (e) { console.log(`NET_FAIL ${'$'}{h} ${'$'}{(e && e.code) || ""} ${'$'}{String((e && e.message) || e).slice(0, 160)} ${'$'}{Date.now() - t} ms`); }
+        }
+    """.trimIndent()
 
     private fun section(title: String) = out("\n## $title")
 

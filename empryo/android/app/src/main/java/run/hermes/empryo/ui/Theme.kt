@@ -1,12 +1,18 @@
 package run.hermes.empryo.ui
 
+import android.content.Context
+import android.os.Build
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 
-/** The dark lavender look of Syed's reference (fixed: no dynamic colour in the test build). */
+/** The dark lavender look of Syed's reference (the default, and the fallback below Android 12). */
 private val Scheme = darkColorScheme(
     primary = Color(0xFFD7BFFA), onPrimary = Color(0xFF2B1650),
     primaryContainer = Color(0xFF3E2E5C), onPrimaryContainer = Color(0xFFEBDDFF),
@@ -19,9 +25,26 @@ private val Scheme = darkColorScheme(
     outline = Color(0xFF8E8796), outlineVariant = Color(0xFF3C3A43),
 )
 
+/**
+ * [amoled]: pure black background and surface; containers stay a few steps above black so cards remain visible.
+ * [dynamic]: wallpaper colours (Material You) on Android 12+. Status colours (lever, dot, blob) never change.
+ */
+fun colorScheme(context: Context, amoled: Boolean, dynamic: Boolean): ColorScheme {
+    val base = if (dynamic && Build.VERSION.SDK_INT >= 31) runCatching { dynamicDarkColorScheme(context) }.getOrDefault(Scheme) else Scheme
+    if (!amoled) return base
+    return base.copy(
+        background = Color.Black, surface = Color.Black, surfaceDim = Color.Black, surfaceContainerLowest = Color.Black,
+        surfaceContainerLow = Color(0xFF0B0B0D), surfaceContainer = Color(0xFF131216),
+        surfaceContainerHigh = Color(0xFF1B1A1F), surfaceContainerHighest = Color(0xFF25242A),
+    )
+}
+
 @Composable
-fun EmpryoTheme(content: @Composable () -> Unit) =
-    MaterialExpressiveTheme(colorScheme = Scheme, motionScheme = MotionScheme.expressive(), content = content)
+fun EmpryoTheme(amoled: Boolean = false, dynamic: Boolean = false, content: @Composable () -> Unit) {
+    val ctx = LocalContext.current
+    val scheme = remember(amoled, dynamic) { colorScheme(ctx, amoled, dynamic) }
+    MaterialExpressiveTheme(colorScheme = scheme, motionScheme = MotionScheme.expressive(), content = content)
+}
 
 /** Status colours shared by the lever, the dot, the chips and the blob. */
 object StatusColors {

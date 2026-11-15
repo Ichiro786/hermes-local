@@ -13,6 +13,8 @@ data class SettingsSnapshot(
     val startOnBoot: Boolean = false,
     val keepAwake: Boolean = false,
     val defaultModel: String = "",
+    val amoled: Boolean = false,
+    val dynamicColor: Boolean = false,
 )
 
 /** App settings (SharedPreferences) as a StateFlow so the UI and the service share one source. */
@@ -29,6 +31,8 @@ class Settings private constructor(context: Context) {
         startOnBoot = prefs.getBoolean("boot", false),
         keepAwake = prefs.getBoolean("keep_awake", false),
         defaultModel = prefs.getString("model", "") ?: "",
+        amoled = prefs.getBoolean("amoled", false),
+        dynamicColor = prefs.getBoolean("dynamic_color", false),
     )
 
     fun update(block: SettingsSnapshot.() -> SettingsSnapshot) {
@@ -40,6 +44,8 @@ class Settings private constructor(context: Context) {
             .putBoolean("boot", s.startOnBoot)
             .putBoolean("keep_awake", s.keepAwake)
             .putString("model", s.defaultModel.trim())
+            .putBoolean("amoled", s.amoled)
+            .putBoolean("dynamic_color", s.dynamicColor)
             .apply()
         _state.value = read()
     }

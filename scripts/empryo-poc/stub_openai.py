@@ -42,6 +42,8 @@ class H(BaseHTTPRequestHandler):
         has_tool_result = any(m.get("role") == "tool" for m in msgs)
         tool_text = " | ".join(str(m.get("content"))[:200] for m in msgs if m.get("role") == "tool")
         LOG.write(f"POST {self.path} stream={body.get('stream')} msgs={len(msgs)} tools={len(tools)} names={names[:60]} tool_result={tool_text!r}\n")
+        if any("STUB_FAIL" in str(m.get("content")) for m in msgs if m.get("role") == "user"):
+            return self._send(400, {"error": {"message": "STUB_PROVIDER_ERROR: this model refused the request", "type": "invalid_request_error"}})
         sname, skey = pick_shell(tools)
         if sname and not has_tool_result:
             args = json.dumps({skey: "echo EMPRYO_SHELL_OK $(uname -m) $(id -u)"})

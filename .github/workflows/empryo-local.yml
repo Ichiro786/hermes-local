@@ -10,6 +10,7 @@ on:
     branches: [empryo-poc]
     paths:
       - "empryo/**"
+      - "scripts/empryo-poc/stub_openai.py"
       - ".github/workflows/empryo-local.yml"
   workflow_dispatch:
 
@@ -65,8 +66,8 @@ jobs:
       - name: Build arm64-v8a test APK (signed, debuggable)
         env:
           ROOTFS_DIR: rootfs-arm64
-          VERSION_NAME: 0.1.0-test1
-          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 0.1.0-test2
+          VERSION_CODE: 3
           KEYSTORE_FILE: ${{ runner.temp }}/release.jks
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -77,16 +78,17 @@ jobs:
           BT=$ANDROID_HOME/build-tools/37.0.0
           $BT/apksigner verify --print-certs out/empryo-local-*-arm64-v8a.apk | head -4
           $BT/aapt2 dump badging out/empryo-local-*-arm64-v8a.apk | grep -E "^package|application-label|debuggable|native-code"
-      - name: Screenshots (Roborazzi)
+      - name: Screenshots (Roborazzi) + logic tests
+        continue-on-error: true  # evidence only: a harness problem must not block the APKs
         env:
           SHOTS_DIR: ${{ github.workspace }}/shots
-        run: cd empryo/android && gradle --no-daemon :app:testDebugUnitTest --tests 'run.hermes.empryo.ui.ScreensShotTest' && ls -l "$SHOTS_DIR"
+        run: cd empryo/android && gradle --no-daemon :app:testDebugUnitTest --tests 'run.hermes.empryo.ui.ScreensShotTest' --tests 'run.hermes.empryo.engine.LogicTest' && ls -l "$SHOTS_DIR"
       - name: Build x86_64 CI APK (emulator smoke)
         env:
           ROOTFS_DIR: rootfs-x86_64
           ABI: x86_64
-          VERSION_NAME: 0.1.0-test1
-          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 0.1.0-test2
+          VERSION_CODE: 3
           GRADLE_ARGS: -PciHooks=true
         run: bash empryo/build-apk.sh
       - uses: actions/upload-artifact@v4

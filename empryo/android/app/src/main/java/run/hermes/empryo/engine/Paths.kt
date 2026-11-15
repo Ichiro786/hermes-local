@@ -5,7 +5,7 @@ import java.io.File
 
 /** Engine files. The rootfs lives at `filesDir/r` (short: guest Unix socket paths are capped at 108 bytes). */
 class Paths(context: Context) {
-    private val app = context.applicationContext
+    val app: Context = context.applicationContext
 
     val rootfs = File(app.filesDir, "r")
     val staging = File(app.filesDir, "r.partial")

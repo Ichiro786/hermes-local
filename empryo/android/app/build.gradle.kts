@@ -29,7 +29,7 @@ android {
         minSdk = 29
         targetSdk = 37
         versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 1
-        versionName = (project.findProperty("versionName") as String?) ?: "0.1.0-test1"
+        versionName = (project.findProperty("versionName") as String?) ?: "0.1.0-test2"
         ndk { abiFilters += engineAbi }
         buildConfigField("String", "ENGINE_ABI", "\"$engineAbi\"")
         buildConfigField("boolean", "CI_HOOKS", "${(project.findProperty("ciHooks") as String?) == "true"}")
@@ -104,6 +104,7 @@ kotlin {
         optIn.addAll(
             "androidx.compose.material3.ExperimentalMaterial3ExpressiveApi",
             "androidx.compose.material3.ExperimentalMaterial3Api",
+            "androidx.compose.foundation.layout.ExperimentalLayoutApi",
         )
     }
 }

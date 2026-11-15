@@ -71,6 +71,12 @@ object AppController {
 
     fun toggle(on: Boolean) = if (on) EngineService.start(app) else EngineService.stop(app)
 
+    /** Pair screen: keeps phone-service running with the engine (and starts the engine if it is off). */
+    fun setPairing(on: Boolean) {
+        settings.update { copy(pairOfficial = on) }
+        EngineService.pair(app, on)
+    }
+
     fun copy(label: String, text: String) {
         (app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(label, text))
     }
@@ -115,6 +121,7 @@ object AppController {
                 if (line.isEmpty()) return@line
                 val url = urlRe.find(line)?.value?.trimEnd('.', ',', ')')
                 val code = codeRe.find(line)?.groupValues?.get(1)
+                if (code != null && _login.value.code == null) copy("Empryo sign-in code", code) // ready to paste on the page
                 _login.update { it.copy(lines = (it.lines + line).takeLast(40), url = url ?: it.url, code = code ?: it.code) }
                 if (url != null && !opened) { opened = true; scope.launch { openUrl(context, url) } }
             }, onExit = { code -> _login.update { it.copy(running = false, exitCode = code) } })

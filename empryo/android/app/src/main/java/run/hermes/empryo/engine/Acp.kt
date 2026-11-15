@@ -57,11 +57,22 @@ class AcpClient(private val stdin: OutputStream) {
             else -> {
                 val d = pending[m.optInt("id", -1)] ?: return true
                 val err = m.optJSONObject("error")
-                if (err != null) d.completeExceptionally(AcpError(err.optString("message", "error ${err.optInt("code")}")))
+                if (err != null) d.completeExceptionally(AcpError(errorText(err)))
                 else d.complete(m.optJSONObject("result") ?: JSONObject())
             }
         }
         return true
+    }
+
+    /** JSON-RPC error message plus its `data` (Empryo puts the real cause there; "Internal error" alone says nothing). */
+    internal fun errorText(err: JSONObject): String {
+        val msg = err.optString("message").ifBlank { "error ${err.optInt("code")}" }
+        val detail = when (val d = err.opt("data")) {
+            null, JSONObject.NULL -> ""
+            is JSONObject -> listOf("details", "message", "error", "reason").firstNotNullOfOrNull { k -> d.optString(k).takeIf { it.isNotBlank() } } ?: d.toString()
+            else -> d.toString()
+        }.trim()
+        return if (detail.isEmpty() || detail == msg) msg else "$msg: ${detail.take(800)}"
     }
 
     fun failAll(why: String) {
@@ -97,6 +108,8 @@ data class ChatUi(
 
 /** The one chat session the app shows, fed by the service's AcpClient. */
 object Chat {
+    const val SLASH_HINT = "Slash commands like /remote only work in Empryo's terminal app, not in this chat. " +
+        "To pair the official Empryo app use Settings > Pair Empryo app; for models use Model providers."
     private val _ui = MutableStateFlow(ChatUi())
     val ui: StateFlow<ChatUi> = _ui.asStateFlow()
     @Volatile var client: AcpClient? = null
@@ -125,6 +138,11 @@ object Chat {
     }
 
     suspend fun send(text: String) {
+        if (text.startsWith("/")) {
+            // ACP has no slash commands; Empryo's /remote, /model etc. only exist in its terminal UI.
+            _ui.update { it.copy(items = it.items + ChatItem.User(text) + ChatItem.Note(SLASH_HINT), error = null) }
+            return
+        }
         val c = client ?: run { _ui.update { it.copy(error = "Start the engine first") }; return }
         val sid = _ui.value.sessionId ?: newSession(Paths.WORKSPACE) ?: return
         _ui.update { it.copy(items = it.items + ChatItem.User(text), busy = true, error = null) }

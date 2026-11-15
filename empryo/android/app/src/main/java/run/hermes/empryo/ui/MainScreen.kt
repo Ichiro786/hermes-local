@@ -1,5 +1,12 @@
 package run.hermes.empryo.ui
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -28,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.MonitorHeart
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Terminal
@@ -67,7 +75,7 @@ import run.hermes.empryo.engine.EngineStatus
 import run.hermes.empryo.engine.Phase
 import run.hermes.empryo.engine.Thermal
 
-enum class Screen { Main, Settings, Accounts, Diagnostics, Chat }
+enum class Screen { Main, Settings, Accounts, Diagnostics, Chat, Pair }
 
 @Composable
 fun MainScreen(
@@ -87,8 +95,10 @@ fun MainScreen(
                 Text("Empryo Local", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
                 StatusLine(status)
             }
+            RoundIcon(Icons.Rounded.QrCode2, "Pair Empryo app", enabled = installed) { onNavigate(Screen.Pair) }
+            Spacer(Modifier.width(8.dp))
             RoundIcon(Icons.Rounded.Key, "Model providers", enabled = installed) { onNavigate(Screen.Accounts) }
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(8.dp))
             RoundIcon(Icons.Rounded.Settings, "Settings") { onNavigate(Screen.Settings) }
         }
 
@@ -143,7 +153,7 @@ fun MainScreen(
 @Composable
 private fun RoundIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, enabled: Boolean = true, onClick: () -> Unit) {
     FilledTonalIconButton(
-        onClick = onClick, enabled = enabled, modifier = Modifier.size(52.dp),
+        onClick = onClick, enabled = enabled, modifier = Modifier.size(48.dp),
         colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
     ) { Icon(icon, contentDescription = label) }
 }
@@ -181,7 +191,7 @@ private fun EngineCard(
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text("Engine", style = MaterialTheme.typography.titleLarge)
-                    Text("empryo acp · $version", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("empryo acp · $version", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) // wraps at large font sizes
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -193,12 +203,23 @@ private fun EngineCard(
                 }
             }
             Spacer(Modifier.height(14.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            var bridgeDetail by remember { mutableStateOf(false) }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 thermal?.let { t ->
-                    val warm = t.status >= 2 || t.headroom >= 0.8f
+                    // Colour follows the label (Moderate and up), so "Cool" is never amber; headroom 1.0 = throttling now.
+                    val warm = t.status >= 2 || t.headroom >= 1f
                     Chip(Icons.Rounded.Thermostat, if (t.headroom.isNaN()) t.label else "${t.label} · ${"%.2f".format(t.headroom)}", if (warm) StatusColors.Amber else null)
                 }
-                status.bridge?.let { Chip(Icons.Rounded.Wifi, it, null) }
+                status.bridge?.let { Chip(Icons.Rounded.Wifi, it, if (it.startsWith("Exited") || it.startsWith("Could not")) StatusColors.Red else null) { bridgeDetail = true } }
+            }
+            if (bridgeDetail) status.bridge?.let { b ->
+                AlertDialog(
+                    onDismissRequest = { bridgeDetail = false },
+                    title = { Text("Phone pairing service") },
+                    text = { Text(b, fontFamily = FontFamily.Monospace) },
+                    confirmButton = { TextButton(onClick = { onNavigate(Screen.Pair); bridgeDetail = false }) { Text("Open pairing") } },
+                    dismissButton = { TextButton(onClick = { onCopy(b); bridgeDetail = false }) { Text("Copy") } },
+                )
             }
             val info = status.message ?: "Workspace /root/workspace"
             Row(
@@ -217,27 +238,33 @@ private fun EngineCard(
                 }
             }
             Spacer(Modifier.height(14.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(
-                    onClick = { onNavigate(Screen.Chat) }, enabled = running, modifier = Modifier.weight(1f).height(60.dp),
-                    shapes = ButtonDefaults.shapes(),
-                ) {
-                    Icon(Icons.AutoMirrored.Rounded.Chat, null)
-                    Spacer(Modifier.width(10.dp))
-                    Text("Open chat", style = MaterialTheme.typography.titleMedium)
+            // Side by side when both labels fit on one line, stacked at large font / display sizes (Syed's phone).
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val stacked = maxWidth < 300.dp * LocalDensity.current.fontScale
+                val chat = @Composable { m: Modifier ->
+                    Button(onClick = { onNavigate(Screen.Chat) }, enabled = running, modifier = m.heightIn(min = 60.dp), shapes = ButtonDefaults.shapes()) {
+                        Icon(Icons.AutoMirrored.Rounded.Chat, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Open chat", style = MaterialTheme.typography.titleMedium, maxLines = 1, softWrap = false)
+                    }
                 }
-                FilledTonalButton(onClick = { onNavigate(Screen.Diagnostics) }, enabled = installed, modifier = Modifier.height(60.dp), shapes = ButtonDefaults.shapes()) {
-                    Text("Diagnostics")
+                val diag = @Composable { m: Modifier ->
+                    FilledTonalButton(onClick = { onNavigate(Screen.Diagnostics) }, enabled = installed, modifier = m.heightIn(min = 60.dp), shapes = ButtonDefaults.shapes()) {
+                        Text("Diagnostics", maxLines = 1, softWrap = false)
+                    }
                 }
+                if (stacked) Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { chat(Modifier.fillMaxWidth()); diag(Modifier.fillMaxWidth()) }
+                else Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { chat(Modifier.weight(1f)); diag(Modifier) }
             }
         }
     }
 }
 
 @Composable
-private fun Chip(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, tint: Color?) {
+private fun Chip(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, tint: Color?, onClick: (() -> Unit)? = null) {
     Row(
-        Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest).padding(horizontal = 10.dp, vertical = 6.dp),
+        Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, null, Modifier.size(16.dp), tint = tint ?: MaterialTheme.colorScheme.onSurfaceVariant)

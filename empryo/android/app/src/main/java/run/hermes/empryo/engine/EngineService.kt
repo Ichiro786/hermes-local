@@ -9,6 +9,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -43,7 +46,9 @@ import java.util.Locale
 class EngineService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var acp: Process? = null
-    private var bridge: Process? = null
+    @Volatile private var bridge: Process? = null
+    @Volatile private var pairHelper: Process? = null
+    @Volatile private var bridgeStopRequested = false
     private var runJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var mcastLock: WifiManager.MulticastLock? = null
@@ -62,12 +67,41 @@ class EngineService : Service() {
         settings = Settings.get(this)
         createChannel(this)
         Chat.onTurn = { active -> main.post { onTurn(active) } }
+        Pairing.onRequest = { r -> pairNotification(r) }
+        // Wi-Fi <-> mobile data changes the DNS servers: rewrite the rootfs resolv.conf (glibc re-reads it).
+        runCatching { getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(netCallback) }
+    }
+
+    private val netCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) { runCatching { GuestSetup.apply(paths) } }
+    }
+
+    /** "Allow X to pair?" as a heads-up notification; tapping opens the Pair screen (Allow / Deny live there). */
+    private fun pairNotification(r: PairRequest?) {
+        val nm = getSystemService(NotificationManager::class.java)
+        if (r == null) { nm.cancel(PAIR_NOTIFICATION_ID); return }
+        val open = PendingIntent.getActivity(
+            this, 2, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(MainActivity.EXTRA_SCREEN, "Pair"),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        nm.notify(PAIR_NOTIFICATION_ID, NotificationCompat.Builder(this, PAIR_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("${r.name} wants to pair")
+            .setContentText("Allow only if it shows ${r.fingerprint}. Tap to answer.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .build())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        goForeground(notification("Starting Empryo…", 0L))
+        val st = EngineState.status.value
+        goForeground(if (st.phase == Phase.Running) notification("Empryo is running", st.runningSince) else notification("Starting Empryo…", 0L))
         when (intent?.action ?: ACTION_START) {
             ACTION_STOP -> stopEngine()
+            ACTION_BRIDGE -> if (EngineState.status.value.isOn) ensureBridge() else startEngine()
+            ACTION_BRIDGE_STOP -> stopBridge()
             else -> if (intent == null && !wantRunning(this)) stopSelfClean() else startEngine()
         }
         return START_STICKY
@@ -92,7 +126,7 @@ class EngineService : Service() {
         val s = settings.value
         paths.ensureDirs()
         runCatching { EngineConfig.apply(paths, s) }.onFailure { log("config.json not updated: ${it.message}") }
-        log("--- start ${stamp()} acp, bridge=${s.pairOfficial && s.lanAccess} port=${s.bridgePort}")
+        log("--- start ${stamp()} acp, bridge=${s.pairOfficial} lan=${s.lanAccess} port=${s.bridgePort} dns=${GuestSetup.networkDns(this)}")
         val p = try {
             Proot.processBuilder(paths, listOf(Paths.EMPRYO, "acp"), splitStderr = true).start()
         } catch (e: Exception) {
@@ -118,7 +152,7 @@ class EngineService : Service() {
             log("acp initialize failed: ${e.message}")
             p.terminate(3000) // the exit below reports stderr
         }
-        if (s.pairOfficial && s.lanAccess) scope.launch { runBridge(s.bridgePort) }
+        if (s.pairOfficial) scope.launch { runBridge(s.bridgePort) }
         val code = try { p.waitFor() } catch (_: InterruptedException) { -1 }
         Chat.client = null
         acp = null; acpPid = null
@@ -126,32 +160,93 @@ class EngineService : Service() {
         if (!stopping) fail("Engine exited (code $code): " + synchronized(stderrTail) { stderrTail.takeLast(6).joinToString("\n") }.ifBlank { "no output" })
     }
 
-    /** Experimental: lets the official Empryo app pair over Wi-Fi with the engine on this phone. */
+    /**
+     * The official Empryo app's bridge: `empryo phone-service --login-item` (never `empryo phone on`, which needs
+     * systemd and copies 368 MB), plus the pairing helper attached to its control socket (see [Pairing]).
+     * phone-service hard-links its control socket; if proot's link2symlink emulation breaks that ("reclaimed-stale" /
+     * "lost-link" on the x86_64 emulator in test1) it retries once with real hard links and remembers what worked.
+     */
     private suspend fun runBridge(port: Int) {
+        if (bridge != null) return
         acquireMulticast()
+        val via = if (settings.value.lanAccess) "auto" else "quick"
         EngineState.set { it.copy(bridge = "Starting on :$port") }
-        val p = try {
-            Proot.processBuilder(paths, listOf(Paths.EMPRYO, "phone-service", "--cwd", Paths.WORKSPACE, "--login-item", "--via", "wifi")).start()
-        } catch (e: Exception) {
-            EngineState.set { it.copy(bridge = "Could not start: ${e.message}") }; return
-        }
-        bridge = p
-        bridgePid = p.pidCompat()
-        p.outputStream.close()
-        val tail = ArrayDeque<String>()
-        Thread({ p.inputStream.bufferedReader().forEachLine { l -> synchronized(tail) { tail.addLast(l); if (tail.size > 20) tail.removeFirst() }; log("bridge: $l") } }, "bridge").apply { isDaemon = true }.start()
-        scope.launch {
-            repeat(30) {
-                if (bridge !== p) return@launch
-                val open = (port..port + 3).firstOrNull { portOpen(it) }
-                if (open != null) { EngineState.set { it.copy(bridge = "Listening on :$open (Wi-Fi)") }; return@launch }
-                delay(1000)
+        Pairing.setState("starting")
+        var l2s = prefs(this).getBoolean(PREF_BRIDGE_L2S, true)
+        var code = -1
+        var last = ""
+        var attempt = 0
+        bridgeStopRequested = false
+        while (true) {
+            attempt++
+            val p = try {
+                Proot.processBuilder(paths, listOf(Paths.EMPRYO, "phone-service", "--cwd", Paths.WORKSPACE, "--login-item", "--via", via), link2symlink = l2s).start()
+            } catch (e: Exception) {
+                EngineState.set { it.copy(bridge = "Could not start: ${e.message}") }; Pairing.setState("failed", e.message); return
             }
+            bridge = p
+            bridgePid = p.pidCompat()
+            p.outputStream.close()
+            log("bridge: phone-service --via $via (link2symlink=$l2s)")
+            val t0 = System.currentTimeMillis()
+            val tail = ArrayDeque<String>()
+            Thread({ p.inputStream.bufferedReader().forEachLine { l -> synchronized(tail) { tail.addLast(l); if (tail.size > 20) tail.removeFirst() }; log("bridge: $l") } }, "bridge").apply { isDaemon = true }.start()
+            val helper = scope.launch { runPairHelper(p) }
+            scope.launch {
+                repeat(30) {
+                    if (bridge !== p) return@launch
+                    val open = (port..port + 3).firstOrNull { portOpen(it) }
+                    if (open != null) { EngineState.set { it.copy(bridge = "Running on :$open (${if (via == "quick") "quick link" else "Wi-Fi + quick link"})") }; return@launch }
+                    delay(1000)
+                }
+            }
+            code = try { p.waitFor() } catch (_: InterruptedException) { -1 }
+            helper.cancel()
+            last = synchronized(tail) { tail.lastOrNull() ?: "no output" }
+            val linkTrouble = listOf("reclaim", "lost-link", "hardlink", "is taken").any { last.contains(it) }
+            if (!stopping && bridge === p && attempt == 1 && linkTrouble && System.currentTimeMillis() - t0 < 30_000) {
+                l2s = !l2s
+                log("bridge: exited ($code) \"$last\"; retrying with link2symlink=$l2s")
+                continue
+            }
+            if (!stopping && bridge === p && attempt == 2 && code != 0) l2s = !l2s // neither worked: keep the default
+            break
         }
-        val code = try { p.waitFor() } catch (_: InterruptedException) { -1 }
+        prefs(this).edit().putBoolean(PREF_BRIDGE_L2S, l2s).apply()
         bridge = null; bridgePid = null
         releaseMulticast()
-        if (!stopping) EngineState.set { it.copy(bridge = "Exited ($code): " + synchronized(tail) { tail.lastOrNull() ?: "no output" }) }
+        Pairing.setState("off")
+        if (!stopping && !bridgeStopRequested) EngineState.set { it.copy(bridge = "Exited ($code): $last") }
+    }
+
+    /** Keeps the pairing helper attached while phone-service runs (it exits until service.json and the socket exist). */
+    private suspend fun runPairHelper(service: Process) {
+        var failures = 0
+        while (bridge === service && failures < 40) {
+            delay(if (failures == 0) 1500 else 2000)
+            val h = try { Pairing.startHelper(paths) } catch (e: Exception) { log("pair helper: ${e.message}"); failures++; continue }
+            pairHelper = h
+            Pairing.attached(h.outputStream)
+            try {
+                h.inputStream.bufferedReader().forEachLine { l -> Pairing.onLine(l)?.let { log(it) } }
+            } catch (_: Exception) {}
+            Pairing.attached(null)
+            val rc = runCatching { h.waitFor() }.getOrDefault(-1)
+            pairHelper = null
+            if (rc != 0) failures++ else failures = 0
+        }
+        if (bridge === service) Pairing.setState("failed", "Could not attach to phone-service (see engine log)")
+    }
+
+    /** UI asked for pairing while the engine runs. */
+    private fun ensureBridge() {
+        if (bridge != null || EngineState.status.value.phase != Phase.Running) return
+        scope.launch { runBridge(settings.value.bridgePort) }
+    }
+
+    private fun stopBridge() {
+        bridgeStopRequested = true
+        scope.launch { pairHelper?.terminate(1000); bridge?.let { b -> bridge = null; b.terminate(4000) }; EngineState.set { it.copy(bridge = null) }; Pairing.setState("off") }
     }
 
     private fun stopEngine() {
@@ -161,6 +256,7 @@ class EngineService : Service() {
         updateNotification(notification("Stopping Empryo…", 0L))
         scope.launch {
             Chat.client = null
+            pairHelper?.terminate(1000)
             bridge?.terminate(4000); bridge = null
             acp?.terminate(6000); acp = null
             runJob?.cancel(); runJob = null
@@ -186,6 +282,7 @@ class EngineService : Service() {
 
     override fun onDestroy() {
         stopping = true
+        runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(netCallback) }
         Chat.client = null
         bridge?.terminate(2000)
         acp?.terminate(3000)
@@ -267,8 +364,13 @@ class EngineService : Service() {
     companion object {
         const val ACTION_START = "run.hermes.empryo.START"
         const val ACTION_STOP = "run.hermes.empryo.STOP"
+        const val ACTION_BRIDGE = "run.hermes.empryo.BRIDGE"
+        const val ACTION_BRIDGE_STOP = "run.hermes.empryo.BRIDGE_STOP"
+        private const val PREF_BRIDGE_L2S = "bridge_link2symlink"
         private const val CHANNEL_ID = "engine"
         private const val NOTIFICATION_ID = 7
+        private const val PAIR_CHANNEL_ID = "pairing"
+        private const val PAIR_NOTIFICATION_ID = 8
         private const val TURN_TAIL_MS = 45_000L
 
         /** Host pids of the proot processes (diagnostics walks their trees). */
@@ -282,14 +384,24 @@ class EngineService : Service() {
                     setShowBadge(false)
                 }
             )
+            context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(PAIR_CHANNEL_ID, "Pair requests", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "A phone or computer asks to pair with Empryo on this phone"
+                }
+            )
         }
 
-        private fun prefs(c: Context) = c.getSharedPreferences("engine", Context.MODE_PRIVATE)
+        fun prefs(c: Context) = c.getSharedPreferences("engine", Context.MODE_PRIVATE)
         fun wantRunning(c: Context) = prefs(c).getBoolean("want_running", false)
         fun setWantRunning(c: Context, v: Boolean) = prefs(c).edit().putBoolean("want_running", v).apply()
 
         fun start(context: Context) =
             ContextCompat.startForegroundService(context, Intent(context, EngineService::class.java).setAction(ACTION_START))
+
+        fun pair(context: Context, on: Boolean) {
+            if (!on && !EngineState.status.value.isOn) return
+            ContextCompat.startForegroundService(context, Intent(context, EngineService::class.java).setAction(if (on) ACTION_BRIDGE else ACTION_BRIDGE_STOP))
+        }
 
         fun stop(context: Context) {
             if (!EngineState.status.value.isOn) { setWantRunning(context, false); return }

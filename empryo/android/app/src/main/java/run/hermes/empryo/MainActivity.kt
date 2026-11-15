@@ -41,6 +41,7 @@ import run.hermes.empryo.engine.ChatItem
 import run.hermes.empryo.engine.Diagnostics
 import run.hermes.empryo.engine.EngineConfig
 import run.hermes.empryo.engine.EngineState
+import run.hermes.empryo.engine.Pairing
 import run.hermes.empryo.engine.Paths
 import run.hermes.empryo.engine.Phase
 import run.hermes.empryo.engine.Thermal
@@ -49,18 +50,26 @@ import run.hermes.empryo.ui.ChatScreen
 import run.hermes.empryo.ui.DiagnosticsScreen
 import run.hermes.empryo.ui.EmpryoTheme
 import run.hermes.empryo.ui.MainScreen
+import run.hermes.empryo.ui.PairScreen
 import run.hermes.empryo.ui.Screen
 import run.hermes.empryo.ui.SettingsScreen
 
 class MainActivity : ComponentActivity() {
     companion object {
         private const val TAG = "EmpryoCI"
+        const val EXTRA_SCREEN = "screen"
         val ciScreen = MutableStateFlow<Screen?>(null)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        openScreen(intent)
         handleCiHooks(intent)
+    }
+
+    /** The pair-request notification opens the Pair screen. */
+    private fun openScreen(intent: Intent?) {
+        intent?.getStringExtra(EXTRA_SCREEN)?.let { n -> Screen.entries.firstOrNull { it.name == n }?.let { ciScreen.value = it } }
     }
 
     /**
@@ -73,12 +82,30 @@ class MainActivity : ComponentActivity() {
         val s = AppController.scope
         intent.getStringExtra("ci_screen")?.let { n -> Screen.entries.firstOrNull { it.name.equals(n, true) }?.let { ciScreen.value = it } }
         intent.getStringExtra("ci_guest")?.let { cmd ->
+            val l2s = !intent.getBooleanExtra("ci_nol2s", false)
             s.launch {
                 EngineState.status.first { it.phase != Phase.Installing && it.phase != Phase.NotInstalled }
-                val r = AppController.runner.run(listOf("/bin/sh", "-c", cmd), 600)
+                val r = AppController.runner.run(listOf("/bin/sh", "-c", cmd), 600, l2s)
                 r.output.lines().forEach { Log.i(TAG, "guest: $it") }
                 Log.i(TAG, "guest-exit: ${r.exitCode}")
             }
+        }
+        if (intent.hasExtra("ci_pair")) {
+            val on = intent.getBooleanExtra("ci_pair", false)
+            s.launch {
+                if (on) {
+                    val job = launch { Pairing.ui.collect { u -> Log.i(TAG, "pair: state=${u.state} code=${u.code != null} qr=${u.qr.size} reaches=${u.reaches} msg=${u.message}") } }
+                    AppController.setPairing(true)
+                    Pairing.setVisible(true)
+                    val u = withContext(Dispatchers.IO) { kotlinx.coroutines.withTimeoutOrNull(120_000) { Pairing.ui.first { it.code != null && it.qr.isNotEmpty() } } }
+                    job.cancel()
+                    Log.i(TAG, "pair-ready: ${u != null} link=${u?.link} reaches=${u?.reaches} qr=${u?.qr?.size} bridge=${EngineState.status.value.bridge}")
+                } else AppController.setPairing(false)
+            }
+        }
+        // Screenshot-only: a pair request the way phone-service sends it, then answered by the UI.
+        intent.getStringExtra("ci_pair_request")?.let { name ->
+            Pairing.onLine("""{"event":"confirm","id":"ci-fake","request":{"fingerprint":"428 913","name":"$name","via":"wifi","kind":"phone"}}""")?.let { Log.i(TAG, it) }
         }
         if (intent.hasExtra("ci_toggle")) {
             val on = intent.getBooleanExtra("ci_toggle", false)
@@ -115,18 +142,17 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         AppController.ensureInstalled()
+        openScreen(intent)
         if (BuildConfig.CI_HOOKS) AppController.scope.launch { EngineState.status.collect { Log.i(TAG, "phase: ${it.phase} ${it.installStage ?: ""} ${it.message ?: ""} bridge=${it.bridge}") } }
         handleCiHooks(intent)
         setContent {
             val ctx = LocalContext.current
             val settings by AppController.settings.state.collectAsStateWithLifecycle()
             val status by EngineState.status.collectAsStateWithLifecycle()
-            EmpryoTheme {
+            EmpryoTheme(amoled = settings.amoled, dynamic = settings.dynamicColor) {
                 var screen by rememberSaveable { mutableStateOf(Screen.Main) }
-                if (BuildConfig.CI_HOOKS) {
-                    val ci by ciScreen.collectAsStateWithLifecycle()
-                    LaunchedEffect(ci) { ci?.let { screen = it; ciScreen.value = null } }
-                }
+                val ci by ciScreen.collectAsStateWithLifecycle() // CI hooks and the pair-request notification
+                LaunchedEffect(ci) { ci?.let { screen = it; ciScreen.value = null } }
                 val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
                 LaunchedEffect(Unit) { if (Build.VERSION.SDK_INT >= 33) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }
                 // Heat chip: one reading every 10 s while the screen is visible (headroom returns NaN when asked faster).
@@ -184,6 +210,17 @@ class MainActivity : ComponentActivity() {
                                     onRun = { AppController.scope.launch { Diagnostics.run(ctx.applicationContext) } },
                                     onCopy = { AppController.copy("Empryo diagnostics", it) },
                                     onShare = { Diagnostics.lastFile?.let { AppController.shareFile(ctx, it, "Share diagnostics") } },
+                                )
+                            }
+                            Screen.Pair -> {
+                                val pair by Pairing.ui.collectAsStateWithLifecycle()
+                                PairScreen(
+                                    pair, settings.pairOfficial, status.phase == Phase.Running, settings.lanAccess, onBack = back,
+                                    onSetPairing = { AppController.setPairing(it) },
+                                    onOpen = { Pairing.open(it) },
+                                    onVisible = { Pairing.setVisible(it) },
+                                    onAnswer = { Pairing.answer(it) },
+                                    onCopy = { AppController.copy("Empryo pairing link", it) },
                                 )
                             }
                             Screen.Chat -> {

@@ -1,6 +1,21 @@
 package run.hermes.empryo.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LoadingIndicator
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.delay
+import run.hermes.empryo.engine.PairUi
+import run.hermes.empryo.engine.Pairing
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -101,16 +116,16 @@ fun AccountsScreen(
         SectionChip(Icons.Rounded.Add, "SIGN IN")
         Panel {
             Text("Runs empryo --login and opens its link in your browser.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            listOf("claude" to "Claude", "codex" to "Codex (ChatGPT)", "codex-device" to "Codex (device code)", "copilot" to "GitHub Copilot").chunked(2).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    row.forEach { (id, label) ->
-                        FilledTonalButton(onClick = { onLogin(id) }, enabled = !login.running, modifier = Modifier.weight(1f), shapes = ButtonDefaults.shapes()) { Text(label, maxLines = 1) }
-                    }
-                }
+            // One per row: two per row clipped "Codex (ChatGPT)" and "Codex (device code)" to "Codex" twice on the phone.
+            listOf(
+                "claude" to "Claude", "codex" to "Codex · browser sign-in", "codex-device" to "Codex · code (no browser redirect)", "copilot" to "GitHub Copilot",
+            ).forEach { (id, label) ->
+                FilledTonalButton(onClick = { onLogin(id) }, enabled = !login.running, modifier = Modifier.fillMaxWidth(), shapes = ButtonDefaults.shapes()) { Text(label) }
             }
             if (login.account.isNotEmpty()) {
                 Text("empryo --login ${login.account}" + when { login.running -> " · waiting"; login.exitCode == 0 -> " · done"; else -> " · exit ${login.exitCode}" }, style = MaterialTheme.typography.titleSmall)
                 login.code?.let { code ->
+                    Text("Enter this code on the page that opened (it is already copied):", style = MaterialTheme.typography.bodyMedium)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(code, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontFamily = Mono)
                         OutlinedButton(onClick = { onCopy(code) }) { Text("Copy code") }
@@ -245,5 +260,136 @@ private fun ChatRow(item: ChatItem) {
             if (item.output.isNotBlank()) Text(item.output.take(1500), fontFamily = Mono, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         is ChatItem.Note -> Text(item.text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+// ---------------------------------------------------------------- Pair the official Empryo app
+
+@Composable
+fun PairScreen(
+    pair: PairUi,
+    pairingOn: Boolean,
+    engineRunning: Boolean,
+    lanAccess: Boolean,
+    onBack: () -> Unit,
+    onSetPairing: (Boolean) -> Unit,
+    onOpen: (String) -> Unit,
+    onVisible: (Boolean) -> Unit,
+    onAnswer: (Boolean) -> Unit,
+    onCopy: (String) -> Unit,
+) {
+    DisposableEffect(Unit) { onVisible(true); onDispose { onVisible(false) } }
+    LaunchedEffect(pair.state) { if (pair.state == "ready" && pair.code == null) onOpen(pair.via) }
+    Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+        TopBar("Pair Empryo app", onBack)
+        Text(
+            "Use the official Empryo app (iPhone, or the Android beta) with the engine on this phone, the way it pairs with a computer. " +
+                "Scan the code with the Empryo app or open the link on the device you pair. A code works for one device for 10 minutes.",
+            Modifier.padding(start = 4.dp, bottom = 14.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (!pairingOn) {
+            Panel {
+                Text("Pairing is off", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Turning it on runs Empryo's phone service next to the engine" + (if (engineRunning) "." else " and starts the engine.") +
+                        " Nothing can connect until you allow it here.",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = { onSetPairing(true) }, shapes = ButtonDefaults.shapes()) { Text("Turn on pairing") }
+            }
+            return@Column
+        }
+        when {
+            pair.state == "failed" -> Panel {
+                Text("Pairing could not start", style = MaterialTheme.typography.titleMedium, color = StatusColors.Red)
+                Text(pair.message ?: "phone-service stopped. Share the engine log from Settings.", style = MaterialTheme.typography.bodyMedium)
+                Button(onClick = { onSetPairing(true) }, shapes = ButtonDefaults.shapes()) { Text("Try again") }
+            }
+            pair.state != "ready" || pair.code == null -> Panel {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LoadingIndicator(Modifier.size(40.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text(if (engineRunning) "Starting the phone service…" else "Starting the engine…", style = MaterialTheme.typography.titleMedium)
+                }
+                pair.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = StatusColors.Red) }
+            }
+            else -> {
+                Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(pair.via == "quick", onClick = { onOpen("quick") }, label = { Text("Quick link · anywhere") })
+                    FilterChip(pair.via != "quick", onClick = { onOpen("auto") }, enabled = lanAccess, label = { Text("Nearby on this Wi-Fi") })
+                }
+                if (!lanAccess) Text(
+                    "Nearby pairing needs LAN access (Settings). The quick link goes through Empryo's relay and works on any network.",
+                    Modifier.padding(start = 4.dp, bottom = 10.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Panel {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { QrCode(pair.qr, Modifier.size(264.dp)) }
+                    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+                    LaunchedEffect(pair.openedAt) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
+                    val left = ((Pairing.expiresAt(pair) - now) / 1000).coerceAtLeast(0)
+                    Text(
+                        if (left > 0) "Scan with the Empryo app · expires in %d:%02d".format(left / 60, left % 60) else "This code expired. Get a new one.",
+                        Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(pair.link.orEmpty(), style = MaterialTheme.typography.bodySmall, fontFamily = Mono, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { pair.link?.let(onCopy) }, shapes = ButtonDefaults.shapes()) { Icon(Icons.Rounded.ContentCopy, null); Spacer(Modifier.width(8.dp)); Text("Copy link") }
+                        OutlinedButton(onClick = { onOpen(pair.via) }) { Text("New code") }
+                    }
+                    pair.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = StatusColors.Red) }
+                }
+                Panel {
+                    Text("How it connects", style = MaterialTheme.typography.titleMedium)
+                    pair.reaches.ifEmpty { listOf("none yet") }.forEach { r ->
+                        val (kind, addr) = r.substringBefore(' ') to r.substringAfter(' ')
+                        Text("${when (kind) { "quick" -> "Quick link (Empryo relay)"; "wifi" -> "Wi-Fi"; "tailscale" -> "Tailscale"; else -> kind }} · ${addr.substringBefore('/')}", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Text(
+                        "When a device asks to pair you get an Allow prompt here (and a notification). Nearby pairing shows a six-digit code on both screens: allow only if they match.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (pair.phones.isNotEmpty()) Panel {
+                    Text("Paired devices", style = MaterialTheme.typography.titleMedium)
+                    pair.phones.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                }
+            }
+        }
+        if (pair.log.isNotEmpty()) Panel {
+            Text("Activity", style = MaterialTheme.typography.titleSmall)
+            Text(pair.log.takeLast(8).joinToString("\n"), style = MaterialTheme.typography.bodySmall, fontFamily = Mono, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        OutlinedButton(onClick = { onSetPairing(false) }, Modifier.padding(bottom = 24.dp)) { Text("Turn off pairing") }
+    }
+    pair.request?.let { r ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Check the code") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (r.computer) "${r.name} wants full control of this phone's engine: every chat, tool and command." else "${r.name} wants to pair over ${if (r.via == "quick") "the quick link" else r.via}.")
+                    Text(r.fingerprint, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.headlineMedium, fontFamily = Mono)
+                    Text("Allow only if ${r.name} shows this code.", style = MaterialTheme.typography.bodyMedium)
+                    if (r.unverified) Text("${r.name} cannot prove it runs the official Empryo app. Allow it only if it is yours.", color = StatusColors.Amber, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { Button(onClick = { onAnswer(true) }, shapes = ButtonDefaults.shapes()) { Text("Allow") } },
+            dismissButton = { OutlinedButton(onClick = { onAnswer(false) }) { Text("Deny") } },
+        )
+    }
+}
+
+/** Empryo's QR matrix ("0101…" rows) on a white tile with a 4-module quiet zone. */
+@Composable
+private fun QrCode(cells: List<String>, modifier: Modifier) {
+    Canvas(modifier.clip(RoundedCornerShape(20.dp)).background(Color.White)) {
+        val n = cells.size
+        if (n == 0) return@Canvas
+        val m = size.minDimension / (n + 8)
+        cells.forEachIndexed { y, row ->
+            row.forEachIndexed { x, c ->
+                if (c == '1') drawRect(Color.Black, Offset((x + 4) * m, (y + 4) * m), Size(m + 0.5f, m + 0.5f))
+            }
+        }
     }
 }
