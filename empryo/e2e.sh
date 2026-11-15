@@ -76,6 +76,21 @@ adb logcat -c 2>/dev/null; sleep 1
 am_app -e ci_guest "'echo $pjs | base64 -d > /tmp/lp.js && BUN_BE_BUN=1 /opt/empryo/empryo /tmp/lp.js'"
 wait_log "guest-exit" 60; ci_log | grep "guest:" | tee "$OUT/socklink.txt"
 note "socket hard-link probe (proot link2symlink): $(grep -oE 'LINK_[A-Z]+.*|INO .*|STAT_ERR.*|CONNECT_B_[A-Z]+.*|PROBE_TIMEOUT' "$OUT/socklink.txt" | tr '\n' ' ')"
+check "socket link (app): same inode + connect through the linked name" "$(grep -q 'INO SAME' "$OUT/socklink.txt" && grep -q CONNECT_B_OK "$OUT/socklink.txt" && echo 1 || echo 0)"
+
+# ---- test3 root cause, A/B on this device with the same proot binary (adb root): filesDir is /data/user/0/...,
+# a symlink to /data/data/...; proot resolves -r, so a link2symlink store named by the symlinked path (test2)
+# makes faked hard links point outside the guest root (RED: ENOENT), the canonical name works (GREEN).
+NLD=$(adb shell pm dump $PKG | grep -m1 'legacyNativeLibraryDir=' | sed 's/.*=//' | tr -d '\r')/x86_64
+RU=/data/user/0/$PKG/files/r; RC=$(adb shell readlink -f $RU | tr -d '\r'); AU=$(adb shell stat -c %u $RC | tr -d '\r')
+note "rootfs $RU -> $RC (uid $AU); nativeLibraryDir $NLD"
+adb shell "echo $pjs | base64 -d > $RC/tmp/lp-root.js"
+for v in "LEGACY=$RU/.l2s" "CANONICAL=$RC/.l2s"; do
+  adb shell "cd $RC && PROOT_LOADER=$NLD/libproot-loader.so PROOT_TMP_DIR=/data/local/tmp PROOT_L2S_DIR=${v#*=} LD_LIBRARY_PATH=$NLD timeout 30 $NLD/libproot.so --kill-on-exit --link2symlink --sysvipc -0 -L -r $RU -w /root -b /dev -b /proc -b /sys /usr/bin/env -i HOME=/root TMPDIR=/tmp PATH=/opt/empryo:/usr/bin:/bin BUN_BE_BUN=1 /opt/empryo/empryo /tmp/lp-root.js" 2>&1 | sed "s/^/${v%%=*} /" | tee -a "$OUT/l2s-ab.txt"
+done
+adb shell "rm -f $RC/tmp/lp-root.js $RC/tmp/lp-a.sock $RC/tmp/lp-b.sock $RC/.l2s/.l2s.lp-*"
+check "l2s RED: store under /data/user/0 (test2) -> linked socket ENOENT" "$(grep -q 'LEGACY CONNECT_B_ERR ENOENT' "$OUT/l2s-ab.txt" && echo 1 || echo 0)"
+check "l2s GREEN: canonical store -> same inode + connect OK" "$(grep -q 'CANONICAL INO SAME' "$OUT/l2s-ab.txt" && grep -q 'CANONICAL CONNECT_B_OK' "$OUT/l2s-ab.txt" && echo 1 || echo 0)"
 
 adb logcat -c 2>/dev/null; sleep 1
 am_app --ez ci_diag true
@@ -85,6 +100,7 @@ adb shell run-as $PKG sh -c "'cat files/logs/diagnostics-*.txt'" >"$OUT/diagnost
 check "diag: --version rc=0" "$(grep -A1 '## empryo --version' "$OUT/diagnostics.txt" | grep -q 'rc=0' && echo 1 || echo 0)"
 check "diag: doctor OK" "$(grep -qE 'Doctor: OK|checks passed' "$OUT/diagnostics.txt" && echo 1 || echo 0)"
 check "diag: bridge result recorded" "$(grep -qE 'BRIDGE (OK|EXITED|NOT LISTENING)' "$OUT/diagnostics.txt" && echo 1 || echo 0)"
+check "diag: phone-service bridge OK (port open, no reclaimed-stale)" "$(grep -q 'BRIDGE OK' "$OUT/diagnostics.txt" && echo 1 || echo 0)"
 note "bridge: $(grep -m1 -E 'BRIDGE ' "$OUT/diagnostics.txt")"
 note "mkdir probe: $(grep -m1 -E 'MKDIR_OK|cannot create' "$OUT/diagnostics.txt")"
 check "diag: idle sample of the acp tree" "$(grep -q 'acp tree over' "$OUT/diagnostics.txt" && echo 1 || echo 0)"
@@ -113,17 +129,19 @@ check "chat: provider error shows its details" "$(grep -q 'chat-done: error=Inte
 am_app -e ci_screen chat; sleep 3; shot "11-chat-error"
 
 # ---- pairing the official Empryo app, headless (phone-service + control-socket helper)
+# Upgrade from test2: plant the dead control-socket link test2 leaves behind (it wedged every later phone-service);
+# the app must drop it before starting the bridge.
+EP=$(adb shell cat $RC/root/.empryo/mobile/service.json | grep -o '"endpoint":"[^"]*"' | cut -d'"' -f4)
+if [ -n "$EP" ]; then
+  adb shell "rm -f $RC$EP && ln -s $RU/.l2s/.l2s.empryo-p1-dead.sock0001 $RC$EP && chown -h $AU:$AU $RC$EP && ls -l $RC$EP" | tee -a "$OUT/checks.txt"
+else note "no service.json endpoint: test2 leftover not planted"; fi
 adb logcat -c 2>/dev/null; sleep 1
 am_app --ez ci_pair true
 if wait_log "pair-ready: (true|false)" 200; then :; fi
 ci_log | grep -E "pair" | tail -40 | tee "$OUT/pair.txt"
-if grep -q 'pair-ready: true' "$OUT/pair.txt"; then
-  check "pair: phone-service + helper gave a code, link and QR" "$(grep -q 'pair-ready: true link=empryo://pair?c=' "$OUT/pair.txt" && echo 1 || echo 0)"
-  check "pair: QR matrix received" "$(grep -q 'pair-ready: true.*qr=[1-9]' "$OUT/pair.txt" && echo 1 || echo 0)"
-else
-  note "PAIRING BLOCKED on this device: $(grep -m1 -o 'bridge=Exited[^|]*' "$OUT/pair.txt")"
-  check "pair: blocker shown in the Pair screen with its reason (hard link)" "$(grep -q 'pair-state: failed msg=.*hard-links it' "$OUT/pair.txt" && echo 1 || echo 0)"
-fi
+check "pair: phone-service + helper gave a code, link and QR" "$(grep -q 'pair-ready: true link=empryo://pair?c=' "$OUT/pair.txt" && echo 1 || echo 0)"
+check "pair: QR matrix received" "$(grep -q 'pair-ready: true.*qr=[1-9]' "$OUT/pair.txt" && echo 1 || echo 0)"
+[ -n "$EP" ] && check "pair: test2 leftover socket link replaced" "$(adb shell readlink $RC$EP | grep -q "^$RU/" && echo 0 || echo 1)"
 note "pair reaches: $(grep -m1 -o 'reaches=\[[^]]*\]' "$OUT/pair.txt" | tail -1)"
 adb shell run-as $PKG sh -c "'grep -E \"bridge|pair\" files/logs/engine.log | tail -40'" >"$OUT/pair-engine.log" 2>&1
 am_app -e ci_screen pair; sleep 4; shot "30-pair"

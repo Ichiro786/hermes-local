@@ -8,6 +8,7 @@ import java.io.File
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
+import java.nio.file.Files
 
 /**
  * Rootfs files that depend on the phone, refreshed before every guest process (cheap: written only when
@@ -18,6 +19,7 @@ import java.net.InetAddress
  * - /etc/hosts and /etc/nsswitch.conf if missing (glibc needs "hosts: files dns").
  * - /usr/local/bin/scutil: Empryo names the computer in the pairing link with `scutil --get ComputerName`
  *   (else the hostname, "localhost" on Android), so this prints the phone's name.
+ * - test2 leftovers: dead link2symlink links in /tmp ([dropLegacyL2sLinks]).
  */
 object GuestSetup {
     /** Public fallbacks after the network's own servers. Private DNS (DoT) servers are not visible to apps. */
@@ -36,6 +38,21 @@ object GuestSetup {
             writeIfChanged(nss, "passwd: files\ngroup: files\nshadow: files\nhosts: files dns\nnetworks: files\nprotocols: files\nservices: files\n")
         val name = deviceName(paths.app).replace("'", "")
         writeIfChanged(File(paths.rootfs, "usr/local/bin/scutil"), "#!/bin/sh\necho '$name'\n", executable = true)
+        dropLegacyL2sLinks(paths.rootfs)
+    }
+
+    /**
+     * test2 kept proot's link2symlink store under the non-canonical rootfs path (see [Proot]); the links it made
+     * resolve to nothing in the guest. A leftover phone-service socket link in /tmp then makes every later
+     * phone-service give up ("reclaimed-stale"), so drop those from /tmp.
+     */
+    internal fun dropLegacyL2sLinks(rootfs: File) {
+        val legacy = rootfs.absolutePath + "/.l2s/"
+        if (rootfs.absolutePath == rootfs.canonicalPath) return
+        File(rootfs, "tmp").listFiles()?.forEach { f ->
+            val target = runCatching { Files.readSymbolicLink(f.toPath()).toString() }.getOrNull()
+            if (target != null && target.startsWith(legacy)) f.delete()
+        }
     }
 
     /** The active network's DNS servers, IPv4 first (as host strings, scoped IPv6 keeps its %iface). */

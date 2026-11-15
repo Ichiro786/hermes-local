@@ -97,7 +97,10 @@ object Proot {
         env["PROOT_TMP_DIR"] = paths.prootTmp.absolutePath
         env["PROOT_LOADER"] = paths.loader.absolutePath
         // One link2symlink store, else renames of emulated hard links fail ("failed to hardlink .l2s.*").
-        env["PROOT_L2S_DIR"] = File(paths.rootfs, ".l2s").apply { mkdirs() }.absolutePath
+        // Canonical path: filesDir is /data/user/0/... (a symlink to /data/data/...) and proot resolves -r, so links
+        // into a non-canonical store fall outside the guest root: every faked hard link (phone-service's control
+        // socket too) then gives ENOENT on stat/connect (test2's "reclaimed-stale").
+        env["PROOT_L2S_DIR"] = File(paths.rootfs, ".l2s").apply { mkdirs() }.canonicalPath
         env["LD_LIBRARY_PATH"] = paths.nativeLibDir.absolutePath
         return pb
     }

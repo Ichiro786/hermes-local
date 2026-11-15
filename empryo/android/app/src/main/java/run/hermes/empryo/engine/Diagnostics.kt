@@ -84,7 +84,7 @@ object Diagnostics {
                 out("the pairing bridge is already running (pid $bpid): ${EngineState.status.value.bridge}")
                 out("port ${s.bridgePort}..${s.bridgePort + 3} open: ${(s.bridgePort..s.bridgePort + 3).filter { EngineService.portOpen(it) }}")
                 out(sample("bridge tree (pairing)", bpid, 10))
-            } else bridgeTest(paths, s)
+            } else bridgeOnce(paths, s)
             File(paths.empryoHome, "logs/errors.jsonl").takeIf { it.isFile }?.let { out("errors.jsonl (tail):\n" + it.readText().takeLast(4000).trim()) }
             File(paths.empryoHome, "mobile/service.log").takeIf { it.isFile }?.let { out("mobile/service.log (tail):\n" + it.readText().takeLast(3000).trim()) }
 
@@ -106,10 +106,6 @@ object Diagnostics {
             runCatching { paths.logs.mkdirs(); f.writeText(_report.value); lastFile = f; out("saved ${f.absolutePath}") }
             _running.value = false
         }
-    }
-
-    private suspend fun bridgeTest(paths: Paths, s: SettingsSnapshot) {
-        if (!bridgeOnce(paths, s)) out("why: phone-service hard-links its control socket; Android denies hard links and proot's link2symlink can't fake one for a socket")
     }
 
     private suspend fun bridgeOnce(paths: Paths, s: SettingsSnapshot): Boolean {

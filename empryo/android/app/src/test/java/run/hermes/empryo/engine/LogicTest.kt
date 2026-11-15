@@ -8,7 +8,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.InetAddress
+import java.nio.file.Files
 
 /** Pure logic behind the test2 fixes (Robolectric only for the real org.json). */
 @RunWith(RobolectricTestRunner::class)
@@ -48,5 +50,21 @@ class LogicTest {
         assertEquals("428 913", Pairing.ui.value.request!!.fingerprint)
         Pairing.onLine("""{"event":"confirm-settled","id":"ab12"}""")
         assertEquals(null, Pairing.ui.value.request)
+    }
+
+    @Test fun dropsTest2SocketLinksOnlyWhenTheRootfsPathIsNotCanonical() {
+        val real = Files.createTempDirectory("r").toFile()
+        val tmp = File(real, "tmp").apply { mkdirs() }
+        val alias = File(real.parentFile, "alias-${real.name}").also { Files.createSymbolicLink(it.toPath(), real.toPath()) }
+        val r = File(alias.path) // like /data/user/0/... -> /data/data/...
+        val dead = File(tmp, "empryo-phone-x.sock").also { Files.createSymbolicLink(it.toPath(), File("${r.path}/.l2s/.l2s.empryo-p1-a.sock0001").toPath()) }
+        val live = File(tmp, "empryo-p2-b.sock").also { Files.createSymbolicLink(it.toPath(), File("${real.canonicalPath}/.l2s/.l2s.empryo-p2-b.sock0001").toPath()) }
+        val plain = File(tmp, "notes.txt").apply { writeText("x") }
+        GuestSetup.dropLegacyL2sLinks(r)
+        assertTrue(!Files.exists(dead.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+        assertTrue(Files.isSymbolicLink(live.toPath()) && plain.isFile)
+        GuestSetup.dropLegacyL2sLinks(real) // canonical rootfs: nothing to do
+        assertTrue(Files.isSymbolicLink(live.toPath()))
+        alias.delete(); real.deleteRecursively()
     }
 }

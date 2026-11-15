@@ -163,9 +163,8 @@ class EngineService : Service() {
     /**
      * The official Empryo app's bridge: `empryo phone-service --login-item` (never `empryo phone on`, which needs
      * systemd and copies 368 MB), plus the pairing helper attached to its control socket (see [Pairing]).
-     * Known blocker (test2 emulator): phone-service listens on a private socket and hard-links it to its public
-     * name. Android denies apps hard links (EACCES) and proot's link2symlink fake leaves a socket link nothing can
-     * stat or connect to, so phone-service loops "lost-link"/"reclaimed-stale" and exits. Reported in the Pair screen.
+     * phone-service listens on a private socket and hard-links it to its public name; Android denies apps hard
+     * links, so proot's link2symlink fakes it (needs a canonical PROOT_L2S_DIR, see [Proot]).
      */
     private suspend fun runBridge(port: Int) {
         if (bridge != null) return

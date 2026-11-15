@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 E="$ROOT/empryo/android"
 ABI=${ABI:-arm64-v8a}
-VERSION_NAME=${VERSION_NAME:-0.1.0-test2}
+VERSION_NAME=${VERSION_NAME:-0.1.0-test3}
 VERSION_CODE=${VERSION_CODE:-1}
 GRADLE=${GRADLE:-gradle}
 

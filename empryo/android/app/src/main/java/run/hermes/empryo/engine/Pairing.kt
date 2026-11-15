@@ -154,13 +154,11 @@ object Pairing {
         (0 until a.length()).map { a.getJSONObject(it) }.map { "${it.optString("name")} (${it.optString("kind")}${it.optString("via").takeIf { v -> v.isNotBlank() }?.let { v -> ", $v" } ?: ""})" }
     }.orEmpty()
 
-    /** Why phone-service stopped, in words; the known Android blocker gets its full explanation. */
+    /** Why phone-service stopped, in words. */
     fun explainExit(code: Int, last: String): String =
         if (listOf("reclaim", "lost-link", "socket path").any { last.contains(it) })
-            "Empryo's phone service could not open its control socket (\"$last\", exit $code). It creates that socket and then " +
-                "hard-links it, and Android does not let apps make hard links; the workaround the engine uses for other files " +
-                "(proot link2symlink) does not work for sockets. So the official app cannot pair with this phone yet. " +
-                "It needs an Empryo change (skip the hard link when it fails) or a patched proot. Chat in this app is not affected."
+            "Empryo's phone service could not open its control socket (\"$last\", exit $code). " +
+                "Run Diagnostics and send the bridge section. Chat in this app is not affected."
         else "phone-service stopped (exit $code): $last"
 
     fun expiresAt(u: PairUi) = if (u.openedAt > 0) u.openedAt + WINDOW_MS else 0L
