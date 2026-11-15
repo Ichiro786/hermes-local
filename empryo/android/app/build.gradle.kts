@@ -55,7 +55,9 @@ android {
         release {
             // Test build: release-like (no ui-tooling) but debuggable so `run-as` works on the phone.
             isDebuggable = true
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }

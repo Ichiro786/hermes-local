@@ -15,7 +15,8 @@ note() { echo "NOTE $*" | tee -a "$OUT/checks.txt"; }
 ci_log() { adb logcat -d -s EmpryoCI:I 2>/dev/null; }
 wait_log() { local end=$(( $(date +%s) + $2 )); while [ "$(date +%s)" -lt "$end" ]; do ci_log | grep -qE "$1" && return 0; sleep 1; done; return 1; }
 shot() { adb exec-out screencap -p >"$OUT/$1.png"; }
-am_app() { adb shell "am start -n $PKG/.MainActivity $*" >/dev/null; }
+# applicationId (run.hermes.empryo.test) differs from the namespace, so name the activity class in full.
+am_app() { local o; o=$(adb shell "am start -n $PKG/run.hermes.empryo.MainActivity $*" 2>&1); case "$o" in *Error*|*rror:*) echo "am start failed: $o" | tee -a "$OUT/checks.txt";; esac; }
 
 adb wait-for-device
 adb shell cmd uimode night yes || true

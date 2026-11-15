@@ -174,7 +174,7 @@ private fun EngineCard(
 ) {
     val running = status.phase == Phase.Running
     val container by animateColorAsState(if (running) Color(0xFF1C2A1F) else MaterialTheme.colorScheme.surfaceContainer, tween(450), label = "card")
-    Card(Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(32.dp), colors = CardDefaults.cardColors(containerColor = container)) {
+    Card(Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(32.dp), colors = CardDefaults.cardColors(containerColor = container, contentColor = MaterialTheme.colorScheme.onSurface)) {
         Column(Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.Terminal, null, Modifier.size(26.dp))

@@ -70,7 +70,7 @@ class AcpClient(private val stdin: OutputStream) {
     }
 
     suspend fun initialize(): JSONObject = request(
-        "initialize",
+        "initialize", timeoutMs = 120_000, params =
         JSONObject().put("protocolVersion", 1).put(
             "clientCapabilities",
             JSONObject().put("fs", JSONObject().put("readTextFile", false).put("writeTextFile", false)).put("terminal", false),

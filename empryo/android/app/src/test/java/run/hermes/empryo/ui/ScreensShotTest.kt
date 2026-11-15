@@ -1,9 +1,8 @@
 package run.hermes.empryo.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -33,7 +32,12 @@ class ScreensShotTest {
 
     private fun shot(name: String, content: @Composable () -> Unit) {
         compose.mainClock.autoAdvance = false
-        compose.setContent { EmpryoTheme { Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) { content() } } }
+        compose.setContent {
+            EmpryoTheme {
+                // Same root as MainActivity: a Surface provides the content colour.
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) { content() }
+            }
+        }
         compose.mainClock.advanceTimeBy(1500)
         compose.onRoot().captureRoboImage("$out/$name.png")
     }
