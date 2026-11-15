@@ -1,0 +1,135 @@
+name: Empryo Local (test APK)
+
+# Branch empryo-poc only. Builds the Empryo Local test APK (empryo/): a minimal Ubuntu minbase + git rootfs
+# per arch (native runners), the arm64-v8a APK (debuggable, release key from the Hermes Local secrets),
+# Roborazzi screenshots, and an x86_64 CI build that runs the emulator smoke (empryo/e2e.sh).
+# Empryo itself is downloaded by the app on first run from dl.empryo.com (sha256 pinned in the build).
+
+on:
+  push:
+    branches: [empryo-poc]
+    paths:
+      - "empryo/**"
+      - ".github/workflows/empryo-local.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: empryo-local
+  cancel-in-progress: true
+
+jobs:
+  rootfs:
+    strategy:
+      matrix:
+        include:
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+          - { arch: x86_64, runner: ubuntu-24.04 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends debootstrap xz-utils
+      - run: sudo bash empryo/rootfs/build-rootfs.sh out && sudo chown -R "$USER" out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-${{ matrix.arch }}
+          path: out/
+          compression-level: 0
+
+  apk:
+    needs: rootfs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: android-actions/setup-android@v3
+        with: { packages: "platforms;android-37.0 build-tools;37.0.0 platform-tools" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "9.8.2" }
+      - run: sudo apt-get install -y --no-install-recommends patchelf
+      - uses: actions/download-artifact@v4
+        with: { name: rootfs-arm64, path: rootfs-arm64 }
+      - uses: actions/download-artifact@v4
+        with: { name: rootfs-x86_64, path: rootfs-x86_64 }
+      - name: Keystore
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          [ -n "$KS" ] || { echo "::error::ANDROID_KEYSTORE_B64 secret missing"; exit 1; }
+          echo "$KS" | base64 -d >"$RUNNER_TEMP/release.jks"
+      - name: Build arm64-v8a test APK (signed, debuggable)
+        env:
+          ROOTFS_DIR: rootfs-arm64
+          VERSION_NAME: 0.1.0-test1
+          VERSION_CODE: ${{ github.run_number }}
+          KEYSTORE_FILE: ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash empryo/build-apk.sh
+      - name: Verify
+        run: |
+          BT=$ANDROID_HOME/build-tools/37.0.0
+          $BT/apksigner verify --print-certs out/empryo-local-*-arm64-v8a.apk | head -4
+          $BT/aapt2 dump badging out/empryo-local-*-arm64-v8a.apk | grep -E "^package|application-label|debuggable|native-code"
+      - name: Screenshots (Roborazzi)
+        env:
+          SHOTS_DIR: ${{ github.workspace }}/shots
+        run: cd empryo/android && gradle --no-daemon :app:testDebugUnitTest --tests 'run.hermes.empryo.ui.ScreensShotTest' && ls -l "$SHOTS_DIR"
+      - name: Build x86_64 CI APK (emulator smoke)
+        env:
+          ROOTFS_DIR: rootfs-x86_64
+          ABI: x86_64
+          VERSION_NAME: 0.1.0-test1
+          VERSION_CODE: ${{ github.run_number }}
+          GRADLE_ARGS: -PciHooks=true
+        run: bash empryo/build-apk.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: empryo-local-apk-arm64-v8a
+          path: out/empryo-local-*-arm64-v8a.apk
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: empryo-local-ci-x86_64
+          path: out/empryo-local-*-x86_64.apk
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: empryo-local-screens
+          path: shots/
+
+  emulator:
+    needs: apk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - uses: actions/download-artifact@v4
+        with: { name: empryo-local-ci-x86_64, path: ci-apk }
+      - name: Emulator smoke
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          profile: pixel_7
+          ram-size: 6144M
+          disk-size: 12G
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: bash empryo/e2e.sh "$(ls ci-apk/*.apk)" e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: empryo-local-emulator
+          path: e2e/

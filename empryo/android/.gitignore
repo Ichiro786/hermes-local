@@ -1,0 +1,4 @@
+app/src/main/jniLibs/
+app/src/main/assets/rootfs/
+app/proot-jnilibs-*.sha256
+keystore.properties
