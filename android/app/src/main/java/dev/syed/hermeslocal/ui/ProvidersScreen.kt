@@ -331,7 +331,7 @@ private fun voiceLine(v: VoiceStatus): String {
 
 @Composable
 private fun KeyDot(on: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) { // gap: a long title never touches the dot
         Box(Modifier.size(9.dp).clip(CircleShape).background(if (on) StatusColors.Green else MaterialTheme.colorScheme.outline))
         Spacer(Modifier.width(6.dp))
         Text(if (on) "Saved" else "Not set", style = MaterialTheme.typography.labelLarge)
@@ -384,7 +384,7 @@ private fun ModelPicker(p: ProviderId, current: String?, onDismiss: () -> Unit, 
 
 @Composable
 private fun StatusDot(on: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) { // gap: a long title never touches the dot
         Box(Modifier.size(9.dp).clip(CircleShape).background(if (on) StatusColors.Green else MaterialTheme.colorScheme.outline))
         Spacer(Modifier.width(6.dp))
         Text(if (on) "Signed in" else "Not signed in", style = MaterialTheme.typography.labelLarge)

@@ -35,7 +35,9 @@ class Storage(context: Context) {
     )
 
     fun scan(): Report {
-        val installs = NativeFs.du(File(home, "installs"))
+        // proot emulates hard links (uv links wheels from its cache into a new generation) by moving the file into
+        // the l2s store, so that is where an installed plugin's dependencies really live.
+        val installs = NativeFs.du(File(home, "installs")) + NativeFs.du(File(paths.rootfs, ".l2s"))
         val stale = staleEnvironments()
         val sessions = listOf("state.db", "state.db-wal", "state.db-shm", "sessions", "memories").sumOf { NativeFs.du(File(home, it)) }
         val caches = NativeFs.du(File(home, "cache")) + NativeFs.du(File(paths.rootfs, "root/.cache"))

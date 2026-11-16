@@ -290,7 +290,8 @@ port_open 150; ok=$?
 [ $ok = 0 ] && ok=1 || ok=0
 sleep 6; snap 04-running
 kill -INT $REC 2>/dev/null; sleep 3; adb pull /sdcard/lever-on.mp4 "$S/lever-on.mp4" >/dev/null 2>&1 || true
-check "fresh: dashboard up, password gate on, login works" "$([ $ok = 1 ] && login_check "$OUT/dashboard-check.txt" && echo 1 || echo 0)"
+# login_check tees its lines: keep them out of the $( ) value (test5 run 10 failed this check on a 200/401/200 dashboard)
+check "fresh: dashboard up, password gate on, login works" "$([ $ok = 1 ] && login_check "$OUT/dashboard-check.txt" >/dev/null && echo 1 || echo 0)"
 boot_kb=$(kb); note "data after first boot: $((boot_kb / 1024)) MiB ($boot_kb KiB)"
 check "data after first boot below 2.6 GB (x86_64 engine; arm64 is smaller)" "$([ "$boot_kb" -gt 0 ] && [ "$boot_kb" -lt 2539062 ] && echo 1 || echo 0)"
 
@@ -328,6 +329,12 @@ clean_kb=$(kb)
 note "data after Clean up: $((clean_kb / 1024)) MiB (freed $(( (plug_kb - clean_kb) / 1024 )) MiB)"
 envs=$(appsh "ls files/r/root/.hermes/installs/*/environments | wc -l" | tr -dc 0-9)
 check "Clean up ran (Freed … shown) and left one dependency generation" "$([ $freed = 1 ] && [ "$envs" = 1 ] && echo 1 || echo 0)"
+# Where the residue lives (run 10: +268 MiB, the Storage screen's "Hermes engine" grew 440 MB with the install):
+# proot's link2symlink store (uv hard-links wheels from its cache), /tmp, and the env's own size.
+appsh "du -sk files/r/.l2s files/r/tmp files/r/root/.cache files/r/root/.hermes/installs files/r/root/.hermes/cache 2>/dev/null; \
+  echo l2s_entries \$(ls -A files/r/.l2s 2>/dev/null | wc -l); for e in files/r/root/.hermes/installs/*/environments/*; do \
+  echo env \$e symlinks \$(find \$e -type l | wc -l) files \$(find \$e -type f | wc -l); done" | tee "$OUT/cleanup-residue.txt"
+sed 's/^/NOTE residue: /' "$OUT/cleanup-residue.txt" | tr -d '\r' >>"$OUT/checks.txt"
 check "after Clean up the data is back within 250 MiB of the baseline" "$([ "$clean_kb" -gt 0 ] && [ $((clean_kb - base_kb)) -lt 256000 ] && echo 1 || echo 0)"
 guest 'COLUMNS=200 hermes plugins list </dev/null 2>&1 | grep -E "^│ langfuse"; /opt/hermes-local/bin/hermes-py -c "import hermes_bootstrap, langfuse; print(\"LANGFUSE_IMPORT_OK\")"' 300 | tee "$OUT/plugin-after-cleanup.txt"
 check "langfuse still enabled + importable after Clean up" "$(grep -q 'LANGFUSE_IMPORT_OK' "$OUT/plugin-after-cleanup.txt" && grep -qE 'langfuse +│ enabled' "$OUT/plugin-after-cleanup.txt" && echo 1 || echo 0)"
