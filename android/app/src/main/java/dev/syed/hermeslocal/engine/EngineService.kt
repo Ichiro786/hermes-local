@@ -139,9 +139,13 @@ class EngineService : Service() {
         while (scope.isActive) {
             delay(if (EngineState.status.value.phase == Phase.Running) 60_000 else 1000)
             val ok = probe(port)
-            if (ok) { misses = 0; if (EngineState.status.value.phase == Phase.Starting) markRunning(port) }
-            else if (EngineState.status.value.phase == Phase.Running && ++misses >= 2) {
-                EngineState.set { it.copy(message = "Dashboard is not answering") }
+            if (ok) {
+                misses = 0
+                if (EngineState.status.value.phase == Phase.Starting) markRunning(port)
+                // a slow spell is over (e2e run 12: a Storage scan kept the message up for good)
+                EngineState.set { if (it.message == NOT_ANSWERING) it.copy(message = null) else it }
+            } else if (EngineState.status.value.phase == Phase.Running && ++misses >= 2) {
+                EngineState.set { it.copy(message = NOT_ANSWERING) }
             }
         }
     }
@@ -301,9 +305,11 @@ class EngineService : Service() {
         }
 
         /** Probe the dashboard: any HTTP answer from the auth bootstrap route means it is up. */
+        private const val NOT_ANSWERING = "Dashboard is not answering"
+
         fun probe(port: Int): Boolean = try {
             val c = URL("http://127.0.0.1:$port/api/auth/providers").openConnection() as HttpURLConnection
-            c.connectTimeout = 1500; c.readTimeout = 2000
+            c.connectTimeout = 1500; c.readTimeout = 5000 // busy IO (Storage scan, installs) can slow a healthy dashboard past 2 s
             val code = c.responseCode
             c.disconnect()
             code in 200..499

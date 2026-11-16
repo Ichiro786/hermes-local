@@ -331,7 +331,10 @@ for am in true false; do
   adb shell am start -n $PKG/.MainActivity --ez ci_dynamic false --ez ci_amoled $am -e ci_screen main >/dev/null; sleep 3
   tsnap "main-nodynamic-amoled_$am"; screen settings 2; tsnap "settings-nodynamic-amoled_$am"
 done
-adb shell am start -n $PKG/.MainActivity --ez ci_dynamic true --ez ci_amoled true -e ci_screen main >/dev/null; sleep 2
+adb shell am start -n $PKG/.MainActivity --ez ci_dynamic true --ez ci_amoled true -e ci_screen main >/dev/null; sleep 70
+tsnap main-after-probe
+dumpui; cp "$P/cur.xml" "$T/main-after-probe.xml"
+check "Home shows no stale 'Dashboard is not answering' while the dashboard answers" "$(grep -q 'Dashboard is not answering' "$T/main-after-probe.xml" && echo 0 || echo 1)"
 check "theme screenshots taken (3 seeds x AMOLED/dark + dynamic off)" "$([ "$(ls "$T"/*.png 2>/dev/null | wc -l)" -ge 25 ] && echo 1 || echo 0)"
 
 echo "== lever off, then a plugin with Python deps, then Storage > Clean up"
