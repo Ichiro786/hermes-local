@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -110,7 +111,10 @@ class ThemeScreenshotTest {
             }
         }
         combos.forEachIndexed { i, (name, _, _) ->
-            idx = i
+            compose.runOnUiThread { idx = i }
+            Snapshot.sendApplyNotifications() // static screens schedule no frame of their own: push the switch to the recomposer
+            compose.mainClock.advanceTimeBy(32)
+            compose.waitForIdle()
             compose.mainClock.advanceTimeBy(ms)
             compose.onRoot().captureRoboImage("$out/t6-$screen-$name.png")
         }
