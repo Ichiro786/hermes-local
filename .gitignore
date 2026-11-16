@@ -10,3 +10,8 @@ android/app/src/main/assets/engine/
 *.apk
 .idea/
 __pycache__/
+
+# build logs with local machine notes stay out of the public repo
+PROGRESS.md
+test*-progress.md
+test*-review.md

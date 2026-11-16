@@ -81,7 +81,7 @@ fun statusPalette(s: ColorScheme, harmonize: Boolean): StatusPalette {
     return StatusPalette(
         on = s.tertiary, onBlob = s.tertiaryContainer, onCard = lerp(s.surfaceContainer, s.tertiaryContainer, 0.5f),
         busy = busy, busyBlob = lerp(s.surfaceContainerHigh, busy, 0.14f),
-        failed = s.error, failedBlob = lerp(s.surfaceContainerHigh, s.errorContainer, 0.75f),
+        failed = s.error, failedBlob = lerp(s.surfaceContainerHigh, s.error, 0.16f),
     )
 }
 
