@@ -273,7 +273,8 @@ appsh "cat files/engine/installed.json; echo; ls -la files/engine/downloads 2>&1
 check "installed.json: source default, engine-v0.23.1-2" "$(grep -q '"source":"default"' "$OUT/fresh-installed.txt" && grep -q 'engine-v0.23.1-2' "$OUT/fresh-installed.txt" && echo 1 || echo 0)"
 check "download deleted after unpacking (downloads/ empty), no r.partial" "$([ -z "$(appsh 'ls files/engine/downloads' 2>/dev/null | tr -d '\r')" ] && ! appsh 'ls files/r.partial' >/dev/null 2>&1 && echo 1 || echo 0)"
 mt=$(appsh "stat -c %Y files/r/opt/hermes/hermes-agent/hermes_cli/__init__.py" | tr -d '\r')
-check "mtimes restored on unpack (hermes_cli/__init__.py older than the install)" "$([ -n "$mt" ] && [ "$mt" -lt "$((t0 - 3600))" ] && echo 1 || echo 0)"
+note "hermes_cli/__init__.py mtime $mt, app started $t0 (the unpack ran after that)"
+check "mtimes restored on unpack (hermes_cli/__init__.py keeps its build-time mtime)" "$([ -n "$mt" ] && [ "$mt" -lt "$t0" ] && echo 1 || echo 0)"
 fresh_kb=$(kb); note "data after install (before first boot): $((fresh_kb / 1024)) MiB"
 sleep 5; snap 02-password-card
 

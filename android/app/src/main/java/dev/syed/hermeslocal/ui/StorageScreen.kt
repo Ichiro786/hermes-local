@@ -118,9 +118,14 @@ fun StorageScreen(status: EngineStatus, onBack: () -> Unit) {
                     onClick = {
                         working = true; notice = null
                         scope.launch {
-                            val freed = AppController.cleanUp()
-                            notice = if (freed == null) "Stop Hermes first." else "Freed ${bytesLabel(freed)}."
-                            working = false; scans++
+                            try {
+                                val freed = AppController.cleanUp()
+                                notice = if (freed == null) "Stop Hermes first." else "Freed ${bytesLabel(freed)}."
+                            } catch (e: Exception) {
+                                notice = "Clean up failed: ${e.message}"
+                            } finally {
+                                working = false; scans++
+                            }
                         }
                     },
                     enabled = !working && !on && !installing && (r?.cleanable ?: 0) > 0,
