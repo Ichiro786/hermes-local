@@ -61,6 +61,8 @@ object AppController {
      */
     fun ensureInstalled() {
         if (installing.get()) return
+        // The UI must not offer the password card (or the lever) for a moment before the download starts.
+        if (!paths.isInstalled() && EngineState.status.value.phase == Phase.Stopped) EngineState.set { it.copy(phase = Phase.NotInstalled) }
         scope.launch {
             withContext(Dispatchers.IO) { if (!installing.get()) installer.cleanLeftovers() }
             if (paths.isInstalled() && !installer.needsUpgrade()) {
