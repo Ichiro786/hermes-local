@@ -57,7 +57,7 @@ fun ScreenFrame(
 ) {
     Box(Modifier.fillMaxSize()) {
         Box(
-            Modifier.align(Alignment.TopEnd).offset(x = 70.dp, y = (-90).dp).size(240.dp)
+            Modifier.align(Alignment.TopEnd).offset(x = 70.dp, y = (-115).dp).size(225.dp)
                 .background(CornerBlob, MaterialShapes.Cookie6Sided.toShape()),
         )
         Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
