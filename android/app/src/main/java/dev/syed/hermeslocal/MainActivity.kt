@@ -60,7 +60,7 @@ class MainActivity : ComponentActivity() {
         intent.getStringExtra("ci_screen")?.let { name -> Screen.entries.firstOrNull { it.name.equals(name, true) }?.let { ciScreen.value = it } }
         intent.getStringExtra("ci_guest")?.let { cmd ->
             AppController.scope.launch {
-                val r = AppController.runner.run(listOf("/bin/bash", "-lc", cmd), timeoutSec = 600)
+                val r = AppController.runner.run(listOf("/bin/bash", "-lc", cmd), timeoutSec = 1200)
                 r.output.lines().forEach { android.util.Log.i("HermesLocalCI", "guest: $it") }
                 android.util.Log.i("HermesLocalCI", "guest-exit: ${r.exitCode}")
             }

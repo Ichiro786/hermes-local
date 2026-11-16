@@ -252,7 +252,7 @@ for kind in gemini codex; do
   mkdir -p "$OUT_DIR/captures-$ASSET_ARCH" && cp "$WORK_DIR/live-fake-$kind.txt" "$OUT_DIR/captures-$ASSET_ARCH/build-live-fake-$kind.txt"
   grep -q '^LIVE_RESULT ok' "$WORK_DIR/live-fake-$kind.txt" || fail "live bridge self-test ($kind) failed"
 done
-in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import sys, hermes_bootstrap; sys.path.append(\"/opt/hermes-local/live-libs\"); import aiortc, av; print(\"aiortc\", aiortc.__version__, \"av\", av.__version__)'" | tee "$WORK_DIR/live-versions.txt"
+in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import sys, hermes_bootstrap; sys.path.append(\"/opt/hermes-local/live-libs\"); import aiortc, av, os; print(\"aiortc\", aiortc.__version__, \"av\", av.__version__, flush=True); os._exit(0)'" | tee "$WORK_DIR/live-versions.txt"
 # Gemini TTS: Google's current models (gemini-3.8-flash[-lite]-tts) answer generateContent with a complete
 # WAV, while Hermes v0.23.0 always wraps the reply as raw PCM (WAV-in-WAV: a header-sized click). One-line
 # patch: keep a reply that already is RIFF/WAVE as it is. Fails the build if the upstream line moved.
