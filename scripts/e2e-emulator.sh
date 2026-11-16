@@ -1,12 +1,16 @@
 #!/bin/bash
-# Emulator e2e for Hermes Local (CI variant built with -PciHooks=true).
-#   e2e-emulator.sh <apk> <out dir>
-# Installs, launches (first-run engine install), sets a password, flips the lever on via CI hook while
-# recording the screen, and checks the dashboard on 127.0.0.1:9119 inside the device. Then the Providers
-# screen: Codex device code + URL, Cancel, Antigravity link + rejected code -> fresh link, both flows at
-# once, stub Codex sign-in -> Use for chat -> a chat turn through /api/ws (evidence in <out>/providers/).
+# Emulator e2e for Hermes Local (CI variants built with -PciHooks=true).
+#   e2e-emulator.sh <test5 apk> <out dir> [<test4 apk>]
+# A. Fresh install: first-run engine download (zstd, sha256), password, lever on (dashboard + login checks),
+#    data size after first boot, the Providers screen (Codex device code, Antigravity link + rejected code,
+#    stub Codex sign-in -> Use for chat -> chat through /api/ws, voice keys), screenshots of every screen,
+#    no agy self-update, a plugin install with Python deps then Storage > Clean up back near the baseline.
+# B. Upgrade (with <test4 apk>): test4 with its bundled engine, password, stub sign-in, a chat session, user
+#    files; then test5 over it: the engine updates itself, logins/sessions/password survive, the old
+#    dependency environment is gone, chat still works.
+# Every check lands in <out>/checks.txt ("CHECK ok|FAIL"); read it, not only the exit code.
 set -uo pipefail
-APK=$1; OUT=${2:-e2e}
+APK=$1; OUT=${2:-e2e}; OLD_APK=${3:-}
 PKG=dev.syed.hermeslocal
 mkdir -p "$OUT"
 adb wait-for-device
@@ -16,8 +20,6 @@ adb root >/dev/null 2>&1; sleep 3; adb wait-for-device
 appsh() { if [ "$(adb shell id -u | tr -d '\r')" = 0 ]; then adb shell "cd /data/data/$PKG && $1"; else adb shell run-as $PKG sh -c "'$1'"; fi; }
 adb shell settings put global window_animation_scale 1
 adb shell cmd uimode night yes || true   # the AMOLED look Syed approved
-adb install -r -g "$APK" || exit 1
-adb shell dumpsys deviceidle whitelist +$PKG >/dev/null 2>&1 || true
 adb logcat -c
 adb logcat -v time >"$OUT/logcat.txt" 2>&1 &
 LOGCAT=$!
@@ -34,8 +36,10 @@ guest() {
   for _ in $(seq 1 "$t"); do ci_log | grep -q "GUEST_END_$id" && break; sleep 1; done
   ci_log | sed -n "/GUEST_BEGIN_$id/,/GUEST_END_$id/p" | sed 's/^.*guest: //' | grep -v "GUEST_"
 }
-check() { # check <name> <1|0>  (no pipeline around the if: prov_ok must change in this shell)
-  local l; if [ "$2" = 1 ]; then l="CHECK ok   $1"; else l="CHECK FAIL $1"; prov_ok=0; fi; echo "$l" | tee -a "$P/checks.txt"; }
+check() { # check <name> <1|0>  (no pipeline around the if: prov_ok/all_ok must change in this shell)
+  local l; if [ "$2" = 1 ]; then l="CHECK ok   $1"; else l="CHECK FAIL $1"; prov_ok=0; all_ok=0; fi; echo "$l" | tee -a "$OUT/checks.txt"; }
+note() { echo "NOTE $*" | tee -a "$OUT/checks.txt"; }
+all_ok=1
 shot() { adb exec-out screencap -p >"$P/$1.png"; adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb shell cat /sdcard/ui.xml >"$P/$1.xml"; }
 dumpui() { adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb shell cat /sdcard/ui.xml >"$P/cur.xml"; }
 front() { adb shell am start -n $PKG/.MainActivity >/dev/null; sleep 2; } # back from the browser
@@ -72,13 +76,13 @@ providers_e2e() {
   got=0
   while [ $(( ($(date +%s%N) - t) / 1000000 )) -lt 15000 ]; do
     ci_log | grep -q "flow Codex: code " && ci_log | grep -q "flow Codex: url " && { got=1; break; }; sleep 0.3; done
-  dt=$(( ($(date +%s%N) - t) / 1000000 ))ms; echo "codex code+url after ${dt} (limit 15 s)" | tee -a "$P/checks.txt"
+  dt=$(( ($(date +%s%N) - t) / 1000000 ))ms; echo "codex code+url after ${dt} (limit 15 s)" | tee -a "$OUT/checks.txt"
   [ $got = 1 ] || wait_log "flow Codex: code " 60 || true   # late result is still recorded, the check stays failed
   url=$(ci_log | grep -m1 -o "flow Codex: url .*" | awk '{print $4}'); code=$(ci_log | grep -m1 -o "flow Codex: code .*" | awk '{print $4}')
-  echo "codex url=$url code=$code" | tee -a "$P/checks.txt"
+  echo "codex url=$url code=$code" | tee -a "$OUT/checks.txt"
   check "Codex code + URL within 15 s" "$got"
   check "Codex URL is https://auth.openai.com/codex/device (no ANSI)" "$([ "$url" = https://auth.openai.com/codex/device ] && echo 1 || echo 0)"
-  sleep 3; echo "after code: $(resumed)" | tee -a "$P/checks.txt"   # the app opens the browser itself
+  sleep 3; echo "after code: $(resumed)" | tee -a "$OUT/checks.txt"   # the app opens the browser itself
   shot 11-codex-browser; front; top; shot 12-codex-code
   check "Codex code + URL on screen" "$(grep -q "text=\"$code\"" "$P/12-codex-code.xml" && grep -q 'auth.openai.com/codex/device' "$P/12-codex-code.xml" && echo 1 || echo 0)"
   # test2 cosmetic bug: the log under the flow showed "2. Enter this code:" with the code line missing.
@@ -95,7 +99,7 @@ print(1 if ok else 0)' "$P/12-codex-code.xml" "$code" 2>/dev/null || echo 0)"
   tap_node '^Sign in with Antigravity$'
   wait_log "flow Antigravity: prompt code" 120; a=$?
   check "Antigravity link shown + waiting for code" "$([ $a = 0 ] && ci_log | grep -q 'flow Antigravity: url https://accounts.google.com/' && echo 1 || echo 0)"
-  sleep 3; echo "after agy link: $(resumed)" | tee -a "$P/checks.txt"
+  sleep 3; echo "after agy link: $(resumed)" | tee -a "$OUT/checks.txt"
   front; shot 13-both-running
   check "both flows running at once" "$(ci_log | grep -qE 'flow Codex: (cancel|exit)' && echo 0 || { ci_log | grep -q 'flow Antigravity: prompt code' && grep -q "text=\"$code\"" "$P/13-both-running.xml" && echo 1 || echo 0; })"
 
@@ -116,11 +120,11 @@ print(1 if ok else 0)' "$P/12-codex-code.xml" "$code" 2>/dev/null || echo 0)"
   shot 15-agy-code-typed
   tap_node '^Submit code$'
   wait_log "flow Antigravity: error" 120; e=$?
-  ci_log | grep "flow Antigravity: error" | tail -1 | tee -a "$P/checks.txt"
+  ci_log | grep "flow Antigravity: error" | tail -1 | tee -a "$OUT/checks.txt"
   check "Antigravity rejects the bad code" "$([ $e = 0 ] && echo 1 || echo 0)"
   for _ in $(seq 1 120); do [ "$(ci_log | grep -c 'flow Antigravity: prompt code')" -ge 2 ] && break; sleep 1; done
   urls=$(ci_log | grep -o "flow Antigravity: url .*" | awk '{print $4}' | sort -u | wc -l)
-  echo "antigravity distinct urls: $urls" | tee -a "$P/checks.txt"
+  echo "antigravity distinct urls: $urls" | tee -a "$OUT/checks.txt"
   check "fresh Antigravity link after the rejected code" "$([ "$urls" -ge 2 ] && [ "$(ci_log | grep -c 'flow Antigravity: prompt code')" -ge 2 ] && echo 1 || echo 0)"
   sleep 3; front; shot 16-agy-fresh-link
   tap_node '^Cancel$' --after '^Antigravity \(Gemini, Claude\)$'
@@ -134,7 +138,7 @@ print(1 if ok else 0)' "$P/12-codex-code.xml" "$code" 2>/dev/null || echo 0)"
 J=$(python3 -c 'import base64,json,time;b=lambda o: base64.urlsafe_b64encode(json.dumps(o).encode()).decode().rstrip("=");print(b({"alg":"none"})+"."+b({"exp":int(time.time())+86400,"https://api.openai.com/auth":{"chatgpt_account_id":"stub"}})+".sig")')
 hermes auth add openai-codex --type api-key --api-key "$J" --label e2e-stub </dev/null 2>&1 | tail -n 2
 G
-)" 200 | tee -a "$P/checks.txt"
+)" 200 | tee -a "$OUT/checks.txt"
   adb shell am start -n $PKG/.MainActivity -e ci_screen main >/dev/null; sleep 2
   n0=$(ci_log | grep -c "status: ")
   adb shell am start -n $PKG/.MainActivity -e ci_screen providers >/dev/null
@@ -142,7 +146,7 @@ G
   top; shot 17-stub-signed-in
   tap_node '^Use for chat$'
   for _ in $(seq 1 150); do ci_log | grep "status: " | tail -1 | grep -q '"model_provider": "openai-codex"' && break; sleep 1; done; sleep 3
-  ci_log | grep "status: " | tail -1 | tee -a "$P/checks.txt"
+  ci_log | grep "status: " | tail -1 | tee -a "$OUT/checks.txt"
   top; shot 18-used-for-chat
   check "Use for chat sets openai-codex as the chat model" "$(ci_log | grep 'status: ' | tail -1 | grep -q '"model_provider": "openai-codex"' && grep -q 'Used for chat' "$P/18-used-for-chat.xml" && echo 1 || echo 0)"
   guest "$CHATPY" 240 | grep -E "CHAT_|MODEL_INFO|delta" | cut -c1-300 | tee "$P/chat-after.txt"
@@ -150,7 +154,7 @@ G
   check "no 'not connected' error after Use for chat" "$(grep -q 'not connected' "$P/chat-after.txt" && echo 0 || echo 1)"
 
   echo "== Voice card: no local Whisper, GPT-Live on the (stub) ChatGPT/Codex sign-in"
-  r=$(find_node '^Live Mode hears with '); echo "voice line: $r" | tee -a "$P/checks.txt"
+  r=$(find_node '^Live Mode hears with '); echo "voice line: $r" | tee -a "$OUT/checks.txt"
   check "voice defaults: no key -> hears with 'nothing yet: add an OpenAI or Gemini key', speaks with Edge" "$(grep -q 'hears with nothing yet: add an OpenAI or Gemini key . speaks with Edge' <<<"$r" && echo 1 || echo 0)"
   gl=0; for _ in $(seq 1 60); do find_node '^GPT-Live uses your ChatGPT \(Codex\) sign-in$' >/dev/null && { gl=1; break; }; sleep 2; done
   shot 18b-voice-codex
@@ -168,7 +172,7 @@ G
   guest 'stat -c "%a %n" /root/.hermes/.env; grep -c "^VOICE_TOOLS_OPENAI_KEY=" /root/.hermes/.env' 60 | tee "$P/openai-key-env.txt"
   check "key in ~/.hermes/.env (0600) as VOICE_TOOLS_OPENAI_KEY" "$(grep -q '^600 ' "$P/openai-key-env.txt" && grep -qx 1 "$P/openai-key-env.txt" && echo 1 || echo 0)"
   check "key not shown on screen" "$(grep -q 'sk-hle2e' "$P/19-openai-key-saved.xml" && echo 0 || echo 1)"
-  r=$(find_node '^Live Mode hears with '); echo "voice line: $r" | tee -a "$P/checks.txt"
+  r=$(find_node '^Live Mode hears with '); echo "voice line: $r" | tee -a "$OUT/checks.txt"
   check "with the OpenAI key: hears with OpenAI (cloud)" "$(grep -q 'hears with OpenAI (cloud)' <<<"$r" && echo 1 || echo 0)"
   tap_node '^OpenAI API key · gpt-live-1$'; sel=0
   for _ in $(seq 1 60); do find_node '^GPT-Live uses your OpenAI API key$' >/dev/null && { sel=1; break; }; sleep 2; done
@@ -192,7 +196,7 @@ G
   saved=0; for _ in $(seq 1 60); do find_node '^Saved …wxyz · Gemini TTS ready$' >/dev/null && { saved=1; break; }; sleep 2; done
   shot 21-gemini-key-saved
   check "Gemini key saved -> 'Saved …wxyz · Gemini TTS ready'" "$saved"
-  r=$(find_node '^Live Mode hears with '); echo "voice line: $r" | tee -a "$P/checks.txt"
+  r=$(find_node '^Live Mode hears with '); echo "voice line: $r" | tee -a "$OUT/checks.txt"
   check "voice line: hears with Gemini (cloud), speaks with Gemini gemini-3.8-flash-lite-tts" "$(grep -q 'hears with Gemini (cloud) . speaks with Gemini gemini-3.8-flash-lite-tts' <<<"$r" && echo 1 || echo 0)"
   tap_node '^Gemini API key · Gemini Live$'; sel=0
   for _ in $(seq 1 60); do find_node '^GPT-Live uses Gemini Live \(gemini-3.8-live\)$' >/dev/null && { sel=1; break; }; sleep 2; done
@@ -212,81 +216,226 @@ G
   [ "$prov_ok" = 1 ]
 }
 
-t0=$(date +%s)
-adb shell am start -n $PKG/.MainActivity
-sleep 5; adb exec-out screencap -p >"$OUT/01-first-run.png"
-# First-run install (verify + unpack ~1 GB) — wait for the password card.
-for _ in $(seq 1 240); do   # payload ~0.9 GB (test3 was ~1.7 GB with Whisper)
-  appsh "ls files/r/opt/hermes-local/bin/hermes-local-start" >/dev/null 2>&1 && \
-    ! appsh "ls files/r.partial" >/dev/null 2>&1 && break
-  sleep 5
-done
-echo "engine installed after $(( $(date +%s) - t0 ))s"
-sleep 8; adb exec-out screencap -p >"$OUT/02-password-card.png"
 
-adb shell am start -n $PKG/.MainActivity -e ci_password e2e-password-123
-for _ in $(seq 1 60); do
-  adb logcat -d -s HermesLocalCI | grep -q "password:" && break; sleep 2
-done
-adb logcat -d -s HermesLocalCI | tail -3
-sleep 3; adb exec-out screencap -p >"$OUT/03-lever-off.png"
+S="$OUT/screens"; mkdir -p "$S"
+snap() { adb exec-out screencap -p >"$S/$1.png"; }
+screen() { adb shell am start -n $PKG/.MainActivity -e ci_screen "$1" >/dev/null; sleep "${2:-3}"; }
+kb() { echo $(( $(appsh "du -sk ${1:-files}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | head -n1) + 0 )); }
+installed_ok() { appsh "ls files/r/opt/hermes-local/bin/hermes-local-start files/engine/installed.json" >/dev/null 2>&1 && \
+  ! appsh "ls files/r.partial" >/dev/null 2>&1; }
+wait_install() { # wait_install <seconds> <label>: the engine is on disk and the app left "Installing"
+  local t=$(date +%s)
+  for _ in $(seq 1 $(( $1 / 5 ))); do installed_ok && ci_log | tail -n 400 >/dev/null && break; sleep 5; done
+  sleep 10
+  echo "$2: engine installed after $(( $(date +%s) - t ))s" | tee -a "$OUT/checks.txt"
+}
+port_open() { for i in $(seq 1 "${1:-150}"); do [ "$(adb shell "toybox nc -z 127.0.0.1 9119 && echo open" 2>/dev/null | tr -d '\r')" = open ] && { echo "port 9119 open after $((i*2))s"; return 0; }; sleep 2; done; return 1; }
+port_closed() { for _ in $(seq 1 30); do [ "$(adb shell "toybox nc -z 127.0.0.1 9119 && echo open" 2>/dev/null | tr -d '\r')" = open ] || return 0; sleep 2; done; return 1; }
+login_check() { # login_check <file>: dashboard root, gate, login, authed config
+  adb forward tcp:19119 tcp:9119 >/dev/null
+  {
+    echo "GET / -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19119/)"
+    echo "GET /api/config (no login) -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19119/api/config)"
+    echo "POST /auth/password-login -> $(curl -s -o /dev/null -w '%{http_code}' -c "$OUT/cookies" -H 'Content-Type: application/json' \
+      -d '{"provider":"basic","username":"admin","password":"e2e-password-123"}' http://127.0.0.1:19119/auth/password-login)"
+    echo "GET /api/config (logged in) -> $(curl -s -o /dev/null -w '%{http_code}' -b "$OUT/cookies" http://127.0.0.1:19119/api/config)"
+  } | tee "$1"
+  grep -q "password-login -> 200" "$1" && grep -q "(no login) -> 401" "$1" && grep -q "(logged in) -> 200" "$1"
+}
+STUBJWT='J=$(python3 -c '"'"'import base64,json,time;b=lambda o: base64.urlsafe_b64encode(json.dumps(o).encode()).decode().rstrip("=");print(b({"alg":"none"})+"."+b({"exp":int(time.time())+86400,"https://api.openai.com/auth":{"chatgpt_account_id":"stub"}})+".sig")'"'"')'
+SESSIONS=$(cat <<'G'
+cat >/tmp/hl-sessions.py <<'PY'
+import sqlite3
+c = sqlite3.connect("/root/.hermes/state.db")
+t = [r[0] for r in c.execute("select name from sqlite_master where type='table' and name like '%session%' order by name")]
+print("SESSIONS", " ".join(n + "=" + str(c.execute("select count(*) from " + n).fetchone()[0]) for n in t))
+PY
+/opt/hermes-local/bin/hermes-py -I /tmp/hl-sessions.py
+G
+)
 
-# Stub model server on the CI host (the emulator reaches it as 10.0.2.2); Codex calls go there once a
-# stub sign-in exists. Written before the dashboard starts so Hermes reads it from ~/.hermes/.env.
 python3 "$(dirname "$0")/stub-llm.py" 18080 >"$OUT/stub-llm.log" 2>&1 &
 STUB=$!
+
+# ======================= A. fresh install of test5 =======================
+echo "===== A. fresh install"
+adb install -r -g "$APK" || exit 1
+adb shell dumpsys deviceidle whitelist +$PKG >/dev/null 2>&1 || true
+adb shell dumpsys package $PKG | grep -m3 -E "versionCode|versionName" | tee -a "$OUT/checks.txt"
+apk_kb=$(( $(stat -c %s "$APK") / 1024 )); note "test5 APK $((apk_kb / 1024)) MiB (CI x86_64 build)"
+check "APK is tiny (no bundled engine, < 60 MiB)" "$([ "$apk_kb" -lt 61440 ] && echo 1 || echo 0)"
+t0=$(date +%s)
+adb shell am start -n $PKG/.MainActivity
+sleep 20; snap 01-first-run-download
+wait_install 1500 "fresh install"
+check "first-run download + install finished" "$(installed_ok && echo 1 || echo 0)"
+appsh "cat files/engine/installed.json; echo; ls -la files/engine/downloads 2>&1; cat files/r/opt/hermes-local/engine-version" | tee "$OUT/fresh-installed.txt"
+check "installed.json: source default, engine-v0.23.1-2" "$(grep -q '"source":"default"' "$OUT/fresh-installed.txt" && grep -q 'engine-v0.23.1-2' "$OUT/fresh-installed.txt" && echo 1 || echo 0)"
+check "download deleted after unpacking (downloads/ empty), no r.partial" "$([ -z "$(appsh 'ls files/engine/downloads' 2>/dev/null | tr -d '\r')" ] && ! appsh 'ls files/r.partial' >/dev/null 2>&1 && echo 1 || echo 0)"
+mt=$(appsh "stat -c %Y files/r/opt/hermes/hermes-agent/hermes_cli/__init__.py" | tr -d '\r')
+note "hermes_cli/__init__.py mtime $mt, app started $t0 (the unpack ran after that)"
+check "mtimes restored on unpack (hermes_cli/__init__.py keeps its build-time mtime)" "$([ -n "$mt" ] && [ "$mt" -lt "$t0" ] && echo 1 || echo 0)"
+fresh_kb=$(kb); note "data after install (before first boot): $((fresh_kb / 1024)) MiB"
+sleep 5; snap 02-password-card
+
+adb shell am start -n $PKG/.MainActivity -e ci_password e2e-password-123
+wait_log "password:" 120; ci_log | grep "password:" | tail -1
+sleep 3; snap 03-lever-off
 guest 'mkdir -p /root/.hermes && echo HERMES_CODEX_BASE_URL=http://10.0.2.2:18080/v1 >>/root/.hermes/.env && grep CODEX /root/.hermes/.env' 120
 
-# Record the lever going up and the engine spooling up.
-adb shell screenrecord --time-limit 170 --bit-rate 6000000 /sdcard/e2e.mp4 &
-REC=$!
-sleep 2
+adb shell screenrecord --time-limit 60 --bit-rate 6000000 /sdcard/lever-on.mp4 &
+REC=$!; sleep 2
 adb shell am start -n $PKG/.MainActivity --ez ci_toggle true
-ok=0
-for i in $(seq 1 150); do
-  code=$(adb shell "toybox nc -z 127.0.0.1 9119 && echo open" 2>/dev/null | tr -d '\r')
-  if [ "$code" = open ]; then ok=1; echo "port 9119 open after ${i}s x2"; break; fi
-  sleep 2
-done
-sleep 6
-adb exec-out screencap -p >"$OUT/04-running.png"
-adb forward tcp:19119 tcp:9119
-{
-  echo "GET / -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19119/)"
-  echo "GET /api/auth/providers -> $(curl -s http://127.0.0.1:19119/api/auth/providers | head -c 300)"
-  echo "GET /api/config (no login) -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19119/api/config)"
-  echo "POST /auth/password-login -> $(curl -s -o /dev/null -w '%{http_code}' -c "$OUT/cookies" -H 'Content-Type: application/json' \
-    -d '{"provider":"basic","username":"admin","password":"e2e-password-123"}' http://127.0.0.1:19119/auth/password-login)"
-  echo "GET /api/config (logged in) -> $(curl -s -o /dev/null -w '%{http_code}' -b "$OUT/cookies" http://127.0.0.1:19119/api/config)"
-} | tee "$OUT/dashboard-check.txt"
-sleep 8
-kill -INT $REC 2>/dev/null; sleep 4
-adb pull /sdcard/e2e.mp4 "$OUT/e2e.mp4" || true
+port_open 150; ok=$?
+[ $ok = 0 ] && ok=1 || ok=0
+sleep 6; snap 04-running
+kill -INT $REC 2>/dev/null; sleep 3; adb pull /sdcard/lever-on.mp4 "$S/lever-on.mp4" >/dev/null 2>&1 || true
+# login_check tees its lines: keep them out of the $( ) value (test5 run 10 failed this check on a 200/401/200 dashboard)
+check "fresh: dashboard up, password gate on, login works" "$([ $ok = 1 ] && login_check "$OUT/dashboard-check.txt" >/dev/null && echo 1 || echo 0)"
+boot_kb=$(kb); note "data after first boot: $((boot_kb / 1024)) MiB ($boot_kb KiB)"
+check "data after first boot below 2.6 GB (x86_64 engine; arm64 is smaller)" "$([ "$boot_kb" -gt 0 ] && [ "$boot_kb" -lt 2539062 ] && echo 1 || echo 0)"
 
-# ---------------- Providers screen (engine running) ----------------
 prov_ok=1
 if [ "$ok" = 1 ]; then providers_e2e || prov_ok=0; else prov_ok=0; fi
+cp "$P"/1[0-9]-*.png "$P"/2[0-9]-*.png "$S/" 2>/dev/null || true
 
-# Lever back down (stop) on camera.
-adb shell screenrecord --time-limit 30 /sdcard/e2e-stop.mp4 &
+echo "== screens: settings, storage, logs"
+screen settings; snap 30-settings
+adb shell input swipe 540 1900 540 600 400; sleep 1; snap 31-settings-scrolled
+adb shell input swipe 540 1900 540 600 400; sleep 1; snap 32-settings-bottom
+screen logs; snap 33-logs
+screen storage 8; snap 34-storage-running
+check "no agy self-update (no agy.*.old, settings update.mode none)" "$(! appsh 'ls files/r/usr/local/bin/' | grep -q 'agy\..*\.old' && appsh 'cat files/r/root/.gemini/antigravity-cli/settings.json' | grep -q '"update.mode": *"none"' && echo 1 || echo 0)"
+appsh "ls -la files/r/usr/local/bin/ | grep agy" | tee -a "$OUT/checks.txt"
+
+echo "== theming (test6): Material You with three wallpaper seeds, AMOLED and dark, then dynamic colour off"
+T="$OUT/theme"; mkdir -p "$T"
+tsnap() { adb exec-out screencap -p >"$T/$1.png"; }
+palette() { # palette <RRGGBB>: what the wallpaper picker writes; SystemUI re-themes and the activity is recreated
+  adb shell "settings put secure theme_customization_overlay_packages '{\"android.theme.customization.system_palette\":\"$1\",\"android.theme.customization.theme_style\":\"TONAL_SPOT\",\"android.theme.customization.color_source\":\"preset\",\"_applied_timestamp\":$(date +%s)000}'"
+  sleep 8
+}
+adb shell settings get secure theme_customization_overlay_packages | tee "$T/palette-before.txt"
+for seed in 1E6FD9 E0711A C2185B; do
+  palette $seed
+  adb shell settings get secure theme_customization_overlay_packages >>"$T/palette-set.txt"
+  for am in true false; do
+    adb shell am start -n $PKG/.MainActivity --ez ci_dynamic true --ez ci_amoled $am -e ci_screen main >/dev/null; sleep 3
+    tsnap "main-$seed-amoled_$am"
+    screen settings 2; tsnap "settings-$seed-amoled_$am"
+    screen storage 6; tsnap "storage-$seed-amoled_$am"
+  done
+  screen providers 3; tsnap "providers-$seed-amoled_false"
+done
+for am in true false; do
+  adb shell am start -n $PKG/.MainActivity --ez ci_dynamic false --ez ci_amoled $am -e ci_screen main >/dev/null; sleep 3
+  tsnap "main-nodynamic-amoled_$am"; screen settings 2; tsnap "settings-nodynamic-amoled_$am"
+done
+adb shell am start -n $PKG/.MainActivity --ez ci_dynamic true --ez ci_amoled true -e ci_screen main >/dev/null; sleep 70
+tsnap main-after-probe
+dumpui; cp "$P/cur.xml" "$T/main-after-probe.xml"
+check "Home shows no stale 'Dashboard is not answering' while the dashboard answers" "$(grep -q 'Dashboard is not answering' "$T/main-after-probe.xml" && echo 0 || echo 1)"
+check "theme screenshots taken (3 seeds x AMOLED/dark + dynamic off)" "$([ "$(ls "$T"/*.png 2>/dev/null | wc -l)" -ge 25 ] && echo 1 || echo 0)"
+
+echo "== lever off, then a plugin with Python deps, then Storage > Clean up"
+adb shell screenrecord --time-limit 40 /sdcard/lever-off.mp4 &
 REC=$!; sleep 2
-adb shell am start -n $PKG/.MainActivity -e ci_screen main
-sleep 3
+screen main 2
 adb shell am start -n $PKG/.MainActivity --ez ci_toggle false
-sleep 12
-adb exec-out screencap -p >"$OUT/05-stopped.png"
-kill -INT $REC 2>/dev/null; sleep 4
-adb pull /sdcard/e2e-stop.mp4 "$OUT/e2e-stop.mp4" || true
-appsh "cat files/engine/logs/engine.log" >"$OUT/engine.log" 2>/dev/null || true
+port_closed; sleep 8; snap 05-stopped
+kill -INT $REC 2>/dev/null; sleep 3; adb pull /sdcard/lever-off.mp4 "$S/lever-off.mp4" >/dev/null 2>&1 || true
+appsh "grep -E 'TERM|exited code|--- ' files/engine/logs/engine.log | tail -n 4" | tee -a "$OUT/checks.txt"
+base_kb=$(kb)
+guest 'timeout 900 hermes plugins install langfuse --enable --yes-deps </dev/null 2>&1 | grep -v "^ *$" | tail -n 6; ls /root/.hermes/installs/*/environments | wc -l' 960 | tee "$OUT/plugin-install.txt"
+plug_kb=$(kb); envs_after=$(tail -n1 "$OUT/plugin-install.txt" | tr -dc 0-9)
+note "data: baseline $((base_kb / 1024)) MiB, after langfuse install $((plug_kb / 1024)) MiB, dependency generations $envs_after"
+screen storage 10; snap 35-storage-before-cleanup
+for _ in $(seq 1 60); do r=$(find_node '^Clean up$') && grep -q ' true ' <<<"$r" && break; sleep 3; done
+echo "clean up button: $r"; tap_node '^Clean up$'
+freed=0; for _ in $(seq 1 90); do find_node '^Freed ' >/dev/null && { freed=1; break; }; sleep 2; done
+sleep 6; snap 36-storage-after-cleanup
+clean_kb=$(kb)
+note "data after Clean up: $((clean_kb / 1024)) MiB (freed $(( (plug_kb - clean_kb) / 1024 )) MiB)"
+envs=$(appsh "ls files/r/root/.hermes/installs/*/environments | wc -l" | tr -dc 0-9)
+check "Clean up ran (Freed … shown) and left one dependency generation" "$([ $freed = 1 ] && [ "$envs" = 1 ] && echo 1 || echo 0)"
+# Where the residue lives (run 10: +268 MiB, the Storage screen's "Hermes engine" grew 440 MB with the install):
+# proot's link2symlink store (uv hard-links wheels from its cache), /tmp, and the env's own size.
+appsh "du -sk files/r/.l2s files/r/tmp files/r/root/.cache files/r/root/.hermes/installs files/r/root/.hermes/cache 2>/dev/null; \
+  echo l2s_entries \$(ls -A files/r/.l2s 2>/dev/null | wc -l); for e in files/r/root/.hermes/installs/*/environments/*; do \
+  echo env \$e symlinks \$(find \$e -type l | wc -l) files \$(find \$e -type f | wc -l); done" | tee "$OUT/cleanup-residue.txt"
+sed 's/^/NOTE residue: /' "$OUT/cleanup-residue.txt" | tr -d '\r' >>"$OUT/checks.txt"
+check "after Clean up the data is back within 250 MiB of the baseline" "$([ "$clean_kb" -gt 0 ] && [ $((clean_kb - base_kb)) -lt 256000 ] && echo 1 || echo 0)"
+guest 'COLUMNS=200 hermes plugins list </dev/null 2>&1 | grep -E "^│ langfuse"; /opt/hermes-local/bin/hermes-py -c "import hermes_bootstrap, langfuse; print(\"LANGFUSE_IMPORT_OK\")"' 300 | tee "$OUT/plugin-after-cleanup.txt"
+check "langfuse still enabled + importable after Clean up" "$(grep -q 'LANGFUSE_IMPORT_OK' "$OUT/plugin-after-cleanup.txt" && grep -qE 'langfuse +│ enabled' "$OUT/plugin-after-cleanup.txt" && echo 1 || echo 0)"
+adb shell am start -n $PKG/.MainActivity --ez ci_toggle true
+port_open 150 && login_check "$OUT/dashboard-after-cleanup.txt" >/dev/null; r=$?
+check "Hermes starts after Clean up" "$([ $r = 0 ] && echo 1 || echo 0)"
+adb shell am start -n $PKG/.MainActivity --ez ci_toggle false; port_closed
+appsh "cat files/engine/logs/engine.log" >"$OUT/engine-fresh.log" 2>/dev/null || true
 adb shell dumpsys gfxinfo $PKG >"$OUT/gfxinfo.txt" 2>/dev/null || true
+grep -E "Janky frames|Total frames|90th|99th" "$OUT/gfxinfo.txt" | tee -a "$OUT/checks.txt" || true
+
+# ======================= B. upgrade from test4 =======================
+if [ -n "$OLD_APK" ]; then
+  echo "===== B. upgrade test4 -> test5"
+  adb uninstall $PKG >/dev/null
+  adb install -r -g "$OLD_APK" || check "install the test4 APK" 0
+  adb shell dumpsys deviceidle whitelist +$PKG >/dev/null 2>&1 || true
+  adb logcat -c
+  adb shell am start -n $PKG/.MainActivity
+  for _ in $(seq 1 120); do appsh "ls files/r/opt/hermes-local/bin/hermes-local-start" >/dev/null 2>&1 && ! appsh "ls files/r.partial" >/dev/null 2>&1 && break; sleep 5; done
+  sleep 15
+  adb shell am start -n $PKG/.MainActivity -e ci_password e2e-password-123
+  wait_log "password:" 180
+  guest "$(printf '%s\n' 'mkdir -p /root/.hermes && echo HERMES_CODEX_BASE_URL=http://10.0.2.2:18080/v1 >>/root/.hermes/.env' "$STUBJWT" \
+    'hermes auth add openai-codex --type api-key --api-key "$J" --label e2e-upgrade </dev/null 2>&1 | tail -n 1' \
+    '/opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_provider.py ensure openai-codex 2>&1 | tail -n 1' \
+    'echo upgrade-marker >/root/my-notes.txt; mkdir -p /root/.hermes/memories && echo remember-me >/root/.hermes/memories/e2e-marker.md')" 240 | tee "$OUT/upgrade-setup.txt"
+  adb shell am start -n $PKG/.MainActivity --ez ci_toggle true
+  port_open 200 >/dev/null; guest "$CHATPY" 240 | grep -E "CHAT_" | cut -c1-200 | tee "$OUT/upgrade-chat-test4.txt"
+  guest "$SESSIONS
+/bin/bash /opt/hermes-local/bin/hermes-local-auth status; cat /root/.hermes/installs/*/facts.json | grep environment; cat /opt/hermes-local/engine-version | head -3" 120 | tee "$OUT/upgrade-before.txt"
+  old_env=$(grep -o 'environments/[0-9a-f]*' "$OUT/upgrade-before.txt" | head -n1)
+  old_kb=$(kb); note "test4: data $((old_kb / 1024)) MiB, env $old_env, $(grep SESSIONS "$OUT/upgrade-before.txt")"
+  check "test4 baseline: chat session created with the stub sign-in" "$(grep -q '^CHAT_OK' "$OUT/upgrade-chat-test4.txt" && echo 1 || echo 0)"
+  adb shell am start -n $PKG/.MainActivity --ez ci_toggle false; port_closed
+  snap 40-test4-before-upgrade
+  echo "== install test5 over test4"
+  adb install -r -g "$APK" || check "upgrade install of the test5 APK" 0
+  adb logcat -c
+  t1=$(date +%s)
+  adb shell am start -n $PKG/.MainActivity
+  sleep 20; snap 41-upgrade-downloading
+  for _ in $(seq 1 300); do appsh "grep -q engine-v0.23.1-2 files/engine/installed.json" >/dev/null 2>&1 && ! appsh "ls files/r.partial" >/dev/null 2>&1 && break; sleep 5; done
+  sleep 15; echo "upgrade: engine replaced after $(( $(date +%s) - t1 ))s" | tee -a "$OUT/checks.txt"
+  snap 42-after-upgrade
+  appsh "cat files/engine/installed.json; echo; ls files/engine/downloads; cat files/r/opt/hermes-local/engine-version | head -3; ls files/r/root/.local/share 2>&1" | tee "$OUT/upgrade-installed.txt"
+  check "upgrade: the engine updated itself to engine-v0.23.1-2 (download)" "$(grep -q '"source":"default"' "$OUT/upgrade-installed.txt" && grep -q 'hermes_ref=v0.23.1' "$OUT/upgrade-installed.txt" && echo 1 || echo 0)"
+  guest "$SESSIONS
+/bin/bash /opt/hermes-local/bin/hermes-local-auth status; /bin/bash /opt/hermes-local/bin/hermes-local-passwd --check && echo PASSWORD_OK; cat /root/my-notes.txt /root/.hermes/memories/e2e-marker.md; ls /root/.hermes/installs/*/environments; cat /root/.hermes/installs/*/facts.json | grep environment; ls -d /root/.local/share/uv 2>&1" 180 | tee "$OUT/upgrade-after.txt"
+  check "upgrade: password kept" "$(grep -q PASSWORD_OK "$OUT/upgrade-after.txt" && echo 1 || echo 0)"
+  check "upgrade: Codex login kept (auth status codex 1, e2e-upgrade)" "$(grep -q '"codex": 1' "$OUT/upgrade-after.txt" && grep -q 'e2e-upgrade' "$OUT/upgrade-after.txt" && echo 1 || echo 0)"
+  check "upgrade: sessions kept (same counts as on test4)" "$(b=$(grep SESSIONS "$OUT/upgrade-before.txt"); a=$(grep SESSIONS "$OUT/upgrade-after.txt"); [ -n "$b" ] && [ "$b" = "$a" ] && ! grep -q 'sessions=0' <<<"$b" && echo 1 || echo 0)"
+  check "upgrade: user files and memories kept" "$(grep -qx upgrade-marker "$OUT/upgrade-after.txt" && grep -qx remember-me "$OUT/upgrade-after.txt" && echo 1 || echo 0)"
+  new_env=$(grep -o 'environments/[0-9a-f]*' "$OUT/upgrade-after.txt" | tail -n1)
+  check "upgrade: no old environment (test4's $old_env gone, one generation, no uv CPython)" "$([ -n "$new_env" ] && [ "$new_env" != "$old_env" ] && \
+    [ "$(grep -cE '^[0-9a-f]{32}$' "$OUT/upgrade-after.txt")" = 1 ] && grep -q 'No such file' "$OUT/upgrade-after.txt" && echo 1 || echo 0)"
+  check "upgrade: no leftovers (no r.partial, downloads/ empty)" "$(! appsh 'ls files/r.partial' >/dev/null 2>&1 && [ -z "$(appsh 'ls files/engine/downloads' 2>/dev/null | tr -d '\r')" ] && echo 1 || echo 0)"
+  up_kb=$(kb); note "upgrade: data $((old_kb / 1024)) MiB on test4 -> $((up_kb / 1024)) MiB on test5"
+  adb shell am start -n $PKG/.MainActivity --ez ci_toggle true
+  port_open 200 && login_check "$OUT/dashboard-after-upgrade.txt" >/dev/null; r=$?
+  check "upgrade: dashboard login with the old password" "$([ $r = 0 ] && echo 1 || echo 0)"
+  guest "$CHATPY" 240 | grep -E "CHAT_" | cut -c1-200 | tee "$OUT/upgrade-chat-test5.txt"
+  check "upgrade: chat still works on the carried sign-in + model setting (new dependency env)" "$(grep -q '^CHAT_OK' "$OUT/upgrade-chat-test5.txt" && echo 1 || echo 0)"
+  snap 43-upgraded-running
+  adb shell am start -n $PKG/.MainActivity --ez ci_toggle false; port_closed
+  appsh "cat files/engine/logs/engine.log" >"$OUT/engine-upgrade.log" 2>/dev/null || true
+fi
+
 kill $LOGCAT $STUB 2>/dev/null
-grep -E "Janky frames|Total frames|90th|99th" "$OUT/gfxinfo.txt" || true
 rm -f "$OUT/cookies"
-# No Hermes self-update text anywhere: app log, engine log, every Providers screen dump.
-if cat "$OUT/logcat.txt" "$OUT/engine.log" "$P"/*.xml 2>/dev/null | grep -v "diag-update:" | grep -qiE 'source-update|update is still running'; then
-  echo "CHECK FAIL no source-update text anywhere" | tee -a "$P/checks.txt"; prov_ok=0
-else echo "CHECK ok   no source-update text anywhere" | tee -a "$P/checks.txt"; fi
-grep -c "CHECK ok" "$P/checks.txt"; grep "CHECK FAIL" "$P/checks.txt"
-[ "$prov_ok" = 1 ] && [ "$ok" = 1 ] && grep -q "password-login -> 200" "$OUT/dashboard-check.txt" && grep -q "(no login) -> 401" "$OUT/dashboard-check.txt" && \
-  grep -q "(logged in) -> 200" "$OUT/dashboard-check.txt" && { echo "E2E PASS"; exit 0; }
+if cat "$OUT/logcat.txt" "$OUT"/engine-*.log "$P"/*.xml 2>/dev/null | grep -v "diag-update:" | grep -qiE 'source-update|update is still running'; then
+  check "no source-update text anywhere" 0; else check "no source-update text anywhere" 1; fi
+echo "CHECKS: $(grep -c 'CHECK ok' "$OUT/checks.txt") ok, $(grep -c 'CHECK FAIL' "$OUT/checks.txt") failed"; grep "CHECK FAIL" "$OUT/checks.txt"
+[ "$all_ok" = 1 ] && { echo "E2E PASS"; exit 0; }
 echo "E2E FAIL"; exit 1

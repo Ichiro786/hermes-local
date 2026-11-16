@@ -29,7 +29,10 @@ android {
         // CI emulator builds only: intent extras drive setup (ci_password, ci_toggle) without UI automation.
         buildConfigField("boolean", "CI_HOOKS", "${(project.findProperty("ciHooks") as String?) == "true"}")
         buildConfigField("String", "ENGINE_REPO", "\"Ichiro786/hermes-local\"")
-        buildConfigField("String", "ENGINE_TAG", "\"${(project.findProperty("engineTag") as String?) ?: "engine-v0.23.0-3"}\"")
+        buildConfigField("String", "ENGINE_TAG", "\"${(project.findProperty("engineTag") as String?) ?: "engine-v0.23.1-2"}\"")
+        // sha256 of that release's rootfs-<arch>.tar.zst (build-apk.sh reads it from the release): the first-run
+        // download and "Install from file" are verified against it. Empty = trust the .sha256 next to the URL.
+        buildConfigField("String", "ENGINE_SHA256", "\"${(project.findProperty("engineSha256") as String?) ?: ""}\"")
     }
 
     signingConfigs {
@@ -64,11 +67,6 @@ android {
             useLegacyPackaging = true
             keepDebugSymbols += listOf("**/libproot.so", "**/libproot-loader.so", "**/libtalloc.so", "**/libandroid-shmem.so")
         }
-    }
-
-    androidResources {
-        // The rootfs payload is streamed out of the APK: store it uncompressed.
-        noCompress += listOf("xz")
     }
 
     compileOptions {
@@ -116,13 +114,16 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-service:2.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
-    // Tar reader + pure-Java xz decoder for the rootfs payload (same as OpenBot Local).
+    // Tar reader + decoders for the engine payload: zstd (engine-v0.23.1-2+, ~11x faster than xz in Java) and
+    // xz (older engines installed from a URL).
     implementation("org.apache.commons:commons-compress:1.27.1")
     implementation("org.tukaani:xz:1.10")
+    implementation("com.github.luben:zstd-jni:1.5.7-28@aar")
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.compose.ui:ui-tooling-preview")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("com.google.android.material:material:1.12.0") // color.utilities: seed -> Material You scheme for previews
     testImplementation("io.github.takahirom.roborazzi:roborazzi:1.77.0")
     testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.77.0")
     testImplementation("androidx.compose.ui:ui-test-junit4")

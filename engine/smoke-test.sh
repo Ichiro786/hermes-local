@@ -42,7 +42,7 @@ stub=$!
 # The stub sign-in below routes Codex to the stub (Hermes reads HERMES_CODEX_BASE_URL from ~/.hermes/.env).
 mkdir -p "$M/root/.hermes"; echo "HERMES_CODEX_BASE_URL=http://127.0.0.1:$STUB_PORT/v1" >>"$M/root/.hermes/.env"
 # Same guest variables the app sets (ProotCommand.guestEnv); pm needs HERMES_RUNTIME_DIR to find its tools.
-envs=(HOME=/root PATH=/opt/hermes-local/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TERM=dumb HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools)
+envs=(HOME=/root PATH=/opt/hermes-local/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TERM=dumb HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools AGY_CLI_DISABLE_AUTO_UPDATE=true)
 log="$work/engine.log"
 
 if [ "$MODE" = chroot ]; then
@@ -70,6 +70,7 @@ echo "== set password"
 echo "$PW" | run /bin/bash /opt/hermes-local/bin/hermes-local-passwd admin || { echo "SMOKE ($MODE): passwd failed"; exit 1; }
 run /bin/bash /opt/hermes-local/bin/hermes-local-passwd --check && echo "password configured"
 
+agy_sha=$(sha256sum "$M/usr/local/bin/agy" 2>/dev/null | cut -c1-64)
 echo "== start"
 run /bin/bash /opt/hermes-local/bin/hermes-local-start >"$log" 2>&1 &
 runner=$!
@@ -174,6 +175,18 @@ if [ "$rc" = 0 ]; then
       note "agy sign-in URL shown, waiting for the code"; else note "agy sign-in URL NOT captured"; fi
     [ -n "$CAPTURE_DIR" ] && cp "$work/codex.txt" "$CAPTURE_DIR/codex-$MODE.txt" && cp "$work/agy.txt" "$CAPTURE_DIR/agy-$MODE.txt"
   fi
+  echo "== test5: slim engine, no agy self-update, stop reaches Hermes"
+  envs_n=$(find "$M"/root/.hermes/installs/*/environments -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+  echo "   dependency generations after the plugin installs: $envs_n; .git: $(ls -d "$M/opt/hermes/hermes-agent/.git" 2>&1 | tail -c 40)"
+  check "engine ships no .git / node_modules / pnpm store / ffplay" "$([ ! -e "$M/opt/hermes/hermes-agent/.git" ] && [ ! -e "$M/opt/hermes/hermes-agent/node_modules" ] && \
+    [ ! -e "$M/root/.hermes/cache/pnpm" ] && ! ls "$M"/opt/hermes/tools/ffmpeg-*/bin/ffplay >/dev/null 2>&1 && echo 1 || echo 0)"
+  check "agy never updated itself (no agy.*.old, binary unchanged, update.mode none)" "$(! ls "$M"/usr/local/bin/agy.*.old >/dev/null 2>&1 && \
+    [ "$(sha256sum "$M/usr/local/bin/agy" 2>/dev/null | cut -c1-64)" = "$agy_sha" ] && grep -q '"update.mode": *"none"' "$M/root/.gemini/antigravity-cli/settings.json" && echo 1 || echo 0)"
+  start_pid=$(pgrep -f 'bin/bash /opt/hermes-local/bin/hermes-local-start' | grep -vx "$runner" | head -n1)
+  echo "   SIGTERM -> hermes-local-start (pid $start_pid)"; [ -n "$start_pid" ] && kill -TERM "$start_pid"
+  gone=0; for _ in $(seq 1 30); do pgrep -f 'hermes (dashboard|gateway)' >/dev/null || { gone=1; break; }; sleep 0.5; done
+  tail -n 5 "$log"
+  check "SIGTERM to hermes-local-start stops the Hermes processes themselves" "$([ -n "$start_pid" ] && [ $gone = 1 ] && echo 1 || echo 0)"
   [ -n "$CAPTURE_DIR" ] && cp "$work/chat-before.txt" "$CAPTURE_DIR/chat-before-$MODE.txt" && cp "$work/chat-after.txt" "$CAPTURE_DIR/chat-after-$MODE.txt" \
     && cp "$log" "$CAPTURE_DIR/engine-$MODE.log"
   echo "----- engine log tail ($MODE) -----"; tail -n 30 "$log"

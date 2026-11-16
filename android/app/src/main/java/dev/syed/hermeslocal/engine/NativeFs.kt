@@ -26,6 +26,18 @@ internal object NativeFs {
     false
   }
 
+  /** Bytes [root] occupies on disk (st_blocks), without crossing symlinks. 0 when missing. */
+  fun du(root: File): Long {
+    val st = try {
+      Os.lstat(root.path)
+    } catch (_: ErrnoException) {
+      return 0L
+    }
+    var total = st.st_blocks * 512
+    if (OsConstants.S_ISDIR(st.st_mode)) root.list()?.forEach { total += du(File(root, it)) }
+    return total
+  }
+
   /** Deletes [root] and everything under it without crossing symlinks. */
   fun deleteTree(root: File) {
     val st = try {
@@ -95,6 +107,25 @@ internal fun Process.isAliveCompat(): Boolean = try {
   false
 } catch (_: IllegalThreadStateException) {
   true
+}
+
+/**
+ * SIGTERM to proot's direct children (the guest's first process, e.g. hermes-local-start, which then stops
+ * its own processes), wait up to [graceMs] for proot to exit with them, then [terminate]. Children are
+ * found by ppid in /proc (an app sees its own processes).
+ */
+internal fun Process.terminateGuestFirst(graceMs: Long = 8000) {
+  val pid = pidCompat() ?: return terminate(graceMs)
+  val children = File("/proc").list()?.filter { it.firstOrNull()?.isDigit() == true }?.mapNotNull { c ->
+    runCatching {
+      val stat = File("/proc/$c/stat").readText()
+      c.toInt().takeIf { stat.substring(stat.lastIndexOf(')') + 2).split(' ')[1].toInt() == pid }
+    }.getOrNull()
+  }.orEmpty()
+  children.forEach { try { Os.kill(it, OsConstants.SIGTERM) } catch (_: ErrnoException) {} }
+  val deadline = System.currentTimeMillis() + if (children.isEmpty()) 0 else graceMs
+  while (isAliveCompat() && System.currentTimeMillis() < deadline) Thread.sleep(100)
+  terminate(1500)
 }
 
 /**

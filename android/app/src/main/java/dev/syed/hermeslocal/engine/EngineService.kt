@@ -1,6 +1,5 @@
 package dev.syed.hermeslocal.engine
 
-import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,10 +8,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -36,15 +33,15 @@ import java.util.Locale
 
 /**
  * Foreground service that owns the Hermes process (proot -> hermes-local-start -> hermes dashboard).
- * specialUse type (no daily cap), partial wakelock while running, survives the app being swiped away
- * (stopWithTask=false), START_STICKY: restarted by the system, it brings Hermes back if the user wanted it on.
+ * specialUse type (no daily cap), survives the app being swiped away (stopWithTask=false), START_STICKY:
+ * restarted by the system, it brings Hermes back if the user wanted it on. Wake lock and heat: [PowerGovernor].
  */
 class EngineService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var process: Process? = null
     private var runJob: Job? = null
-    private var wakeLock: PowerManager.WakeLock? = null
-    private var wifiLock: WifiManager.WifiLock? = null
+    private lateinit var governor: PowerGovernor
+    private var lastNotification: Notification? = null
     @Volatile private var stopping = false
     private var restarts = 0
     private lateinit var paths: EnginePaths
@@ -57,12 +54,14 @@ class EngineService : Service() {
         paths = EnginePaths(this)
         settings = Settings.get(this)
         createChannel(this)
+        governor = PowerGovernor(this, scope) { coolDown() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Always enter the foreground first: a started FGS must call startForeground within seconds.
-        goForeground(notification("Starting Hermes…", 0L))
+        goForeground(lastNotification ?: notification("Starting Hermes…", 0L))
         when (intent?.action ?: ACTION_START) { // null intent = sticky restart by the system
+            ACTION_CRON_WAKE -> if (runJob?.isActive == true) governor.onCronWake() else stopSelfClean()
             ACTION_STOP -> stopEngine(userRequested = true)
             ACTION_RESTART -> scope.launch {
                 EngineState.set { it.copy(phase = Phase.Starting, runningSince = 0L) }
@@ -74,6 +73,7 @@ class EngineService : Service() {
     }
 
     private fun goForeground(n: Notification) {
+        lastNotification = n
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         ServiceCompat.startForeground(this, NOTIFICATION_ID, n, type)
     }
@@ -86,7 +86,7 @@ class EngineService : Service() {
         ProotCommand.preflight(paths)?.let { fail(it); return }
         if (!s.passwordSet) { fail("Set a dashboard password first"); return }
         EngineState.set { it.copy(phase = Phase.Starting, port = s.port, lan = s.lanAccess, message = null, runningSince = 0L) }
-        acquireLocks(s)
+        governor.start(s)
         runJob = scope.launch { runOnce(s) }
     }
 
@@ -132,14 +132,20 @@ class EngineService : Service() {
         }
     }
 
+    /** Fast while starting; once running every 60 s (HERMES_LOCAL_READY and the process exit already tell us
+     *  the important changes; each probe wakes proot and two Python processes). */
     private suspend fun healthLoop(port: Int) {
         var misses = 0
         while (scope.isActive) {
-            delay(if (EngineState.status.value.phase == Phase.Running) 5000 else 1000)
+            delay(if (EngineState.status.value.phase == Phase.Running) 60_000 else 1000)
             val ok = probe(port)
-            if (ok) { misses = 0; if (EngineState.status.value.phase == Phase.Starting) markRunning(port) }
-            else if (EngineState.status.value.phase == Phase.Running && ++misses >= 3) {
-                EngineState.set { it.copy(message = "Dashboard is not answering") }
+            if (ok) {
+                misses = 0
+                if (EngineState.status.value.phase == Phase.Starting) markRunning(port)
+                // a slow spell is over (e2e run 12: a Storage scan kept the message up for good)
+                EngineState.set { if (it.message == NOT_ANSWERING) it.copy(message = null) else it }
+            } else if (EngineState.status.value.phase == Phase.Running && ++misses >= 2) {
+                EngineState.set { it.copy(message = NOT_ANSWERING) }
             }
         }
     }
@@ -152,7 +158,7 @@ class EngineService : Service() {
         updateNotification(notification("Hermes is running · 127.0.0.1:$port", since))
     }
 
-    private fun stopEngine(userRequested: Boolean) {
+    private fun stopEngine(userRequested: Boolean, why: String? = null) {
         if (userRequested) settings.wantRunning = false
         stopping = true
         EngineState.set { it.copy(phase = Phase.Stopping) }
@@ -161,7 +167,7 @@ class EngineService : Service() {
             killProcess()
             runJob?.cancel()
             runJob = null
-            EngineState.set { it.copy(phase = Phase.Stopped, runningSince = 0L, message = null) }
+            EngineState.set { it.copy(phase = Phase.Stopped, runningSince = 0L, message = why) }
             stopSelfClean()
         }
     }
@@ -169,52 +175,47 @@ class EngineService : Service() {
     private fun killProcess() {
         val p = process ?: return
         stopping = true
-        p.terminate(8000) // SIGTERM lets Hermes flush sessions; proot --kill-on-exit takes the guests down
+        // SIGTERM to hermes-local-start (proot's guest child), which stops the Hermes processes themselves so
+        // sessions flush; proot exits with its last guest. A SIGTERM to proot would SIGKILL everything instead.
+        p.terminateGuestFirst(8000)
         process = null
+    }
+
+    /** Thermal SEVERE with no turn running: stop and tell the user. */
+    private fun coolDown() {
+        if (stopping || EngineState.status.value.phase != Phase.Running) return
+        log("--- paused: the phone is too hot (thermal status ${EngineState.status.value.thermal}) ${stamp()}")
+        stopEngine(userRequested = true, why = "Paused to let the phone cool down. Slide up to start again.")
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(
+            NOTIFICATION_ID + 1,
+            NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(R.drawable.ic_notification).setContentTitle("Hermes paused")
+                .setContentText("The phone got too hot, so Hermes stopped. Start it again from the app.").setAutoCancel(true).build(),
+        )
     }
 
     private fun fail(message: String) {
         settings.wantRunning = false
         EngineState.set { it.copy(phase = Phase.Failed, message = message, runningSince = 0L) }
         log("FAILED: $message")
-        releaseLocks()
+        governor.stop()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     private fun stopSelfClean() {
-        releaseLocks()
+        governor.stop()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
         stopping = true
-        process?.terminate(3000)
-        releaseLocks()
+        process?.terminateGuestFirst(3000)
+        governor.stop()
         scope.cancel()
         val ph = EngineState.status.value.phase
         if (ph == Phase.Running || ph == Phase.Starting || ph == Phase.Stopping) EngineState.set { it.copy(phase = Phase.Stopped, runningSince = 0L) }
         super.onDestroy()
-    }
-
-    @SuppressLint("WakelockTimeout")
-    private fun acquireLocks(s: SettingsSnapshot) {
-        if (s.keepAwake && wakeLock == null) {
-            wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
-                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HermesLocal:engine").apply { setReferenceCounted(false); acquire() }
-        }
-        if (s.lanAccess && wifiLock == null) {
-            @Suppress("DEPRECATION")
-            val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_HIGH_PERF else WifiManager.WIFI_MODE_FULL
-            wifiLock = (applicationContext.getSystemService(WIFI_SERVICE) as WifiManager)
-                .createWifiLock(mode, "HermesLocal:lan").apply { setReferenceCounted(false); acquire() }
-        }
-    }
-
-    private fun releaseLocks() {
-        wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null
-        wifiLock?.let { if (it.isHeld) it.release() }; wifiLock = null
     }
 
     private fun writeSettingsEnv(s: SettingsSnapshot) {
@@ -274,6 +275,7 @@ class EngineService : Service() {
         const val ACTION_START = "dev.syed.hermeslocal.START"
         const val ACTION_STOP = "dev.syed.hermeslocal.STOP"
         const val ACTION_RESTART = "dev.syed.hermeslocal.RESTART"
+        const val ACTION_CRON_WAKE = "dev.syed.hermeslocal.CRON_WAKE"
         private const val CHANNEL_ID = "engine"
         private const val NOTIFICATION_ID = 7
 
@@ -303,9 +305,11 @@ class EngineService : Service() {
         }
 
         /** Probe the dashboard: any HTTP answer from the auth bootstrap route means it is up. */
+        private const val NOT_ANSWERING = "Dashboard is not answering"
+
         fun probe(port: Int): Boolean = try {
             val c = URL("http://127.0.0.1:$port/api/auth/providers").openConnection() as HttpURLConnection
-            c.connectTimeout = 1500; c.readTimeout = 2000
+            c.connectTimeout = 1500; c.readTimeout = 5000 // busy IO (Storage scan, installs) can slow a healthy dashboard past 2 s
             val code = c.responseCode
             c.disconnect()
             code in 200..499

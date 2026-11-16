@@ -5,3 +5,5 @@
 -dontwarn org.brotli.dec.**
 -dontwarn org.objectweb.asm.**
 -keep class org.apache.commons.compress.archivers.tar.** { *; }
+# zstd-jni: native methods and fields are looked up by name from JNI.
+-keep class com.github.luben.zstd.** { *; }

@@ -20,7 +20,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.RocketLaunch
+import androidx.compose.material.icons.rounded.ViewInAr
+import androidx.compose.material.icons.rounded.VpnKey
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -97,6 +102,7 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
     }
 
     ScreenFrame("Providers", onBack) {
+        SectionChip(Icons.Rounded.ViewInAr, "Sign-in")
         Text(
             "Hermes uses these sign-ins for its models. You can also manage providers in the dashboard.",
             Modifier.padding(horizontal = 8.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -107,11 +113,13 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
             val f = flows[p]
             val running = f?.running == true
             Card(
-                Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(24.dp),
+                Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(28.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
             ) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (p == ProviderId.Codex) Icons.Rounded.Code else Icons.Rounded.RocketLaunch, null, Modifier.size(24.dp))
+                        Spacer(Modifier.width(14.dp))
                         Text(p.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                         if (info == null) LoadingIndicator(Modifier.size(28.dp)) else StatusDot(signedIn)
                     }
@@ -125,7 +133,7 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
                         }
                     }
                     if (p == ProviderId.Antigravity && info?.agy == false) {
-                        Text("agy CLI is missing from this engine. Update the engine.", color = StatusColors.Red, style = MaterialTheme.typography.bodySmall)
+                        Text("agy CLI is missing from this engine. Update the engine.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = { ProviderFlows.start(p) }, enabled = !running, shapes = ButtonDefaults.shapes()) {
@@ -156,11 +164,12 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
                 }
             }
         }
+        SectionChip(Icons.Rounded.GraphicEq, "Voice")
         LiveVoiceCard()
         VoiceKeyCard(VoiceKeyKind.OpenAi)
         VoiceKeyCard(VoiceKeyKind.Gemini)
-        notice?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
-        statusInfo?.error?.let { Text("Status check failed: $it", color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
+        notice?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        statusInfo?.error?.let { Text("Status check failed: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
 
     confirmLogout?.let { p ->
@@ -181,11 +190,13 @@ private fun LiveVoiceCard() {
     var error by remember { mutableStateOf<String?>(null) }
     val v = voice
     Card(
-        Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(24.dp),
+        Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.GraphicEq, null, Modifier.size(24.dp))
+                Spacer(Modifier.width(14.dp))
                 Text("Voice in the Hermes app", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 if (v == null || busy) LoadingIndicator(Modifier.size(28.dp))
             }
@@ -193,7 +204,7 @@ private fun LiveVoiceCard() {
                 Text(voiceLine(v), style = MaterialTheme.typography.bodySmall)
                 Text(
                     gptLiveLine(v), style = MaterialTheme.typography.bodySmall,
-                    color = if (v.gptLive) MaterialTheme.colorScheme.primary else StatusColors.Amber,
+                    color = if (v.gptLive) MaterialTheme.colorScheme.primary else MaterialTheme.status.busy,
                 )
                 if (v.liveBackends.size >= 2) {
                     Text("GPT-Live engine", style = MaterialTheme.typography.labelLarge)
@@ -212,7 +223,7 @@ private fun LiveVoiceCard() {
                     }
                 }
             }
-            (error ?: v?.error)?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
+            (error ?: v?.error)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         }
     }
 }
@@ -246,11 +257,13 @@ private fun VoiceKeyCard(kind: VoiceKeyKind) {
     val v = voice
     val saved = if (openAi) v?.openAiKey == true else v?.geminiKey == true
     Card(
-        Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(24.dp),
+        Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.VpnKey, null, Modifier.size(24.dp))
+                Spacer(Modifier.width(14.dp))
                 Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 if (v == null || busy) LoadingIndicator(Modifier.size(28.dp)) else KeyDot(saved)
             }
@@ -266,7 +279,7 @@ private fun VoiceKeyCard(kind: VoiceKeyKind) {
                 val what = if (openAi) "GPT-Live" else "Gemini TTS"
                 Text(
                     "Saved ${if (openAi) v.keyHint else v.geminiHint} · " + if (ready) "$what ready" else "$what not ready",
-                    style = MaterialTheme.typography.bodySmall, color = if (ready) MaterialTheme.colorScheme.primary else StatusColors.Amber,
+                    style = MaterialTheme.typography.bodySmall, color = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.status.busy,
                 )
             }
             val hint = if (openAi) "sk-…" else "AIza…"
@@ -289,7 +302,7 @@ private fun VoiceKeyCard(kind: VoiceKeyKind) {
                     OutlinedButton(onClick = { confirmRemove = true }, enabled = !busy, shapes = ButtonDefaults.shapes()) { Text("Remove") }
                 }
             }
-            (error ?: v?.error?.takeIf { openAi })?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
+            (error ?: v?.error?.takeIf { openAi })?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         }
     }
     if (confirmRemove) {
@@ -318,8 +331,8 @@ private fun voiceLine(v: VoiceStatus): String {
 
 @Composable
 private fun KeyDot(on: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline))
+    Row(Modifier.padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) { // gap: a long title never touches the dot
+        Box(Modifier.size(9.dp).clip(CircleShape).background(if (on) MaterialTheme.status.on else MaterialTheme.colorScheme.outline))
         Spacer(Modifier.width(6.dp))
         Text(if (on) "Saved" else "Not set", style = MaterialTheme.typography.labelLarge)
     }
@@ -371,8 +384,8 @@ private fun ModelPicker(p: ProviderId, current: String?, onDismiss: () -> Unit, 
 
 @Composable
 private fun StatusDot(on: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline))
+    Row(Modifier.padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) { // gap: a long title never touches the dot
+        Box(Modifier.size(9.dp).clip(CircleShape).background(if (on) MaterialTheme.status.on else MaterialTheme.colorScheme.outline))
         Spacer(Modifier.width(6.dp))
         Text(if (on) "Signed in" else "Not signed in", style = MaterialTheme.typography.labelLarge)
     }
@@ -413,13 +426,13 @@ private fun FlowPanel(f: SignInFlow, onSendCode: (String) -> Unit, onCancel: () 
                 OutlinedTextField(pasted, { pasted = it }, label = { Text("Paste the code from Google") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Button(onClick = { onSendCode(pasted); pasted = "" }, enabled = pasted.isNotBlank(), shapes = ButtonDefaults.shapes()) { Text("Submit code") }
             }
-            f.error?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
+            f.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             TextButton(onClick = onCancel) { Text("Cancel") }
         } else {
             when (f.phase) {
                 FlowPhase.Done -> Text("Signed in ✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                 FlowPhase.Cancelled -> Text("Sign-in cancelled.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                else -> Text(f.error ?: "Sign-in did not finish.", color = StatusColors.Red)
+                else -> Text(f.error ?: "Sign-in did not finish.", color = MaterialTheme.colorScheme.error)
             }
             TextButton(onClick = onDismiss) { Text("Close") }
         }

@@ -20,6 +20,8 @@ import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -47,16 +49,15 @@ fun LogsScreen(onBack: () -> Unit) {
     }
     val list = rememberLazyListState()
     LaunchedEffect(shown.size) { if (shown.isNotEmpty()) list.scrollToItem(shown.size - 1) }
-    Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            FilledTonalIconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
-            Spacer(Modifier.width(12.dp))
-            Text("Logs", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmallEmphasized, fontWeight = FontWeight.Bold)
-            FilledTonalIconButton(onClick = { AppController.shareLog(ctx) }) { Icon(Icons.Rounded.Share, contentDescription = "Share log") }
-        }
+    ScreenFrame("Logs", onBack, scroll = false, actions = {
+        FilledTonalIconButton(
+            onClick = { AppController.shareLog(ctx) }, modifier = Modifier.size(52.dp),
+            colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
+        ) { Icon(Icons.Rounded.Share, contentDescription = "Share log") }
+    }) {
         Card(
-            Modifier.fillMaxSize().padding(12.dp), shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            Modifier.fillMaxSize().padding(bottom = 12.dp), shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
         ) {
             SelectionContainer {
                 LazyColumn(state = list, modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -64,9 +65,9 @@ fun LogsScreen(onBack: () -> Unit) {
                         Text(
                             line, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 14.sp,
                             color = when {
-                                line.contains("FAILED") || line.contains("Error") || line.contains("Traceback") -> StatusColors.Red
-                                line.startsWith("HERMES_LOCAL_READY") -> MaterialTheme.colorScheme.primary
-                                line.startsWith("---") -> MaterialTheme.colorScheme.tertiary
+                                line.contains("FAILED") || line.contains("Error") || line.contains("Traceback") -> MaterialTheme.colorScheme.error
+                                line.startsWith("HERMES_LOCAL_READY") -> MaterialTheme.status.on
+                                line.startsWith("---") -> MaterialTheme.colorScheme.primary
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant
                             },
                         )

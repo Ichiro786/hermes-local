@@ -1,8 +1,9 @@
 name: Android APK
 
-# Builds the release APK (arm64-v8a, engine bundled, signed with the CI keystore from repo secrets)
-# and an x86_64 CI variant that is installed on an API 36 emulator: app launch, first-run engine
-# install, password, lever on -> dashboard answers on 127.0.0.1:9119 inside the emulator, screen video.
+# Builds the release APK (arm64-v8a, no bundled engine since test5: it downloads the engine release on first
+# run, sha256 baked in; signed with the CI keystore from repo secrets) and x86_64 CI variants for an API 36
+# emulator e2e (scripts/e2e-emulator.sh): fresh install, providers, Storage clean-up, and an upgrade from the
+# v1.0.0-test4 app (built from its tag with its bundled engine) to this build.
 #
 # Secrets: ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
 
@@ -10,13 +11,16 @@ on:
   workflow_dispatch:
     inputs:
       engine_tag:
-        description: "Engine release to bundle"
-        default: "engine-v0.23.0-3"
+        description: "Engine release the app downloads"
+        default: "engine-v0.23.1-2"
       version_name:
         default: "1.0.0"
       emulator:
         type: boolean
         default: true
+      upgrade_from:
+        description: "App tag for the upgrade test (empty = skip)"
+        default: "v1.0.0-test4"
 
 permissions:
   contents: read
@@ -36,11 +40,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "9.8.2" }
       - run: sudo apt-get install -y --no-install-recommends patchelf
-      - name: Engine payload
+      - name: Engine sha256 (the app downloads the payload itself)
         run: |
           mkdir -p engine-dl
-          gh release download "${{ inputs.engine_tag }}" --repo "$GITHUB_REPOSITORY" -D engine-dl -p 'rootfs-arm64.tar.xz*'
-          ls -l engine-dl
+          gh release download "${{ inputs.engine_tag }}" --repo "$GITHUB_REPOSITORY" -D engine-dl -p 'rootfs-arm64.tar.zst.sha256'
+          cat engine-dl/*.sha256
       - name: Keystore
         env:
           KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
@@ -59,8 +63,11 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: bash scripts/build-apk.sh
-      - name: Verify signature
-        run: $ANDROID_HOME/build-tools/37.0.0/apksigner verify --print-certs out/*.apk | head -5
+      - name: Verify signature + badging
+        run: |
+          $ANDROID_HOME/build-tools/37.0.0/apksigner verify --print-certs out/*.apk | head -5
+          $ANDROID_HOME/build-tools/37.0.0/aapt2 dump badging out/*.apk | grep -E "^package|sdkVersion|targetSdk" || true
+          ls -l out/*.apk; sha256sum out/*.apk
       - uses: actions/upload-artifact@v4
         with:
           name: hermes-local-${{ inputs.version_name }}-arm64-v8a
@@ -70,11 +77,12 @@ jobs:
   emulator:
     if: ${{ inputs.emulator }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 150
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - name: KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -86,16 +94,22 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "9.8.2" }
       - run: sudo apt-get install -y --no-install-recommends patchelf
-      - name: Engine payload (x86_64)
+      - name: Old app for the upgrade test (its own tag, its own bundled engine)
+        if: ${{ inputs.upgrade_from != '' }}
         run: |
-          mkdir -p engine-dl
-          gh release download "${{ inputs.engine_tag }}" --repo "$GITHUB_REPOSITORY" -D engine-dl -p 'rootfs-x86_64.tar.xz*'
+          git worktree add old "${{ inputs.upgrade_from }}"
+          eng=$(grep -oE 'engine-v[0-9.]+-[0-9]+' old/scripts/build-apk.sh | head -n1); echo "old engine: $eng"
+          mkdir -p engine-old
+          gh release download "$eng" --repo "$GITHUB_REPOSITORY" -D engine-old -p 'rootfs-x86_64.tar.xz*'
+          cd old && ENGINE_DIR=../engine-old ENGINE_TAG="$eng" ABI=x86_64 GRADLE=gradle GRADLE_ARGS=-PciHooks=true VERSION_CODE=1 bash scripts/build-apk.sh
+          ls -l out/; rm -rf ../engine-old android/app/build
       - name: Build x86_64 CI APK (debug key, CI hooks)
         env:
-          ENGINE_DIR: engine-dl
+          ENGINE_TAG: ${{ inputs.engine_tag }}
           ABI: x86_64
           GRADLE: gradle
           GRADLE_ARGS: -PciHooks=true
+          VERSION_CODE: ${{ github.run_number }}
         run: bash scripts/build-apk.sh
       - name: Emulator e2e
         uses: reactivecircus/android-emulator-runner@v2
@@ -105,9 +119,9 @@ jobs:
           target: google_apis
           profile: pixel_7
           ram-size: 6144M
-          disk-size: 12G
+          disk-size: 16G
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
-          script: bash scripts/e2e-emulator.sh out/hermes-local-1.0.0-x86_64.apk e2e
+          script: bash scripts/e2e-emulator.sh out/hermes-local-1.0.0-x86_64.apk e2e ${{ inputs.upgrade_from != '' && 'old/out/hermes-local-1.0.0-x86_64.apk' || '' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

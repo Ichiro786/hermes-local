@@ -9,7 +9,7 @@ on:
     inputs:
       hermes_ref:
         description: "Hermes Agent release tag (stable)"
-        default: "v0.23.0"
+        default: "v0.23.1"
       revision:
         description: "Payload revision (engine-<ref>-<revision>)"
         default: "1"
@@ -44,7 +44,7 @@ jobs:
       - name: Host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils jq shellcheck libtalloc-dev gawk
+          sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils zstd jq shellcheck libtalloc-dev gawk
           df -h /
 
       - name: Lint
@@ -69,8 +69,11 @@ jobs:
           HERMES_COMMIT: ${{ steps.ref.outputs.sha }}
           ENGINE_REVISION: ${{ inputs.revision }}
           GIT_SHA: ${{ github.sha }}
+          # Installed size limit (the build fails above it): 2.2 GB for the phone's arm64 engine; the x86_64
+          # engine (CI emulator only) has bigger binaries.
+          SIZE_LIMIT: ${{ matrix.arch == 'arm64' && '2200000000' || '2500000000' }}
         run: |
-          sudo --preserve-env=OUT_DIR,WORK_DIR,HERMES_REF,HERMES_COMMIT,ENGINE_REVISION,GIT_SHA bash engine/build-rootfs.sh
+          sudo --preserve-env=OUT_DIR,WORK_DIR,HERMES_REF,HERMES_COMMIT,ENGINE_REVISION,GIT_SHA,SIZE_LIMIT bash engine/build-rootfs.sh
           sudo chown -R "$(id -u):$(id -g)" "$OUT_DIR"
           ls -l "$OUT_DIR"
 
@@ -125,17 +128,17 @@ jobs:
           set -euo pipefail
           mkdir out; find dl -type f -exec mv {} out/ \;
           ls -l out
-          ls out/rootfs-*.tar.xz >/dev/null || { echo "::error::no payload built"; exit 1; }
+          ls out/rootfs-*.tar.zst >/dev/null || { echo "::error::no payload built"; exit 1; }
           # Publish only when every requested arch built and passed both smoke tests.
           for a in $(jq -r '.[]' <<<'${{ inputs.archs }}'); do
             f=$([ "$a" = arm64 ] && echo arm64 || echo x86_64)
-            [ -f "out/rootfs-$f.tar.xz" ] || { echo "::error::$f payload missing; not publishing"; exit 1; }
+            [ -f "out/rootfs-$f.tar.zst" ] || { echo "::error::$f payload missing; not publishing"; exit 1; }
             grep -qx "chroot=success proot=success" "out/smoke-$f.txt" || { echo "::error::$f smoke failed ($(cat out/smoke-$f.txt 2>/dev/null)); not publishing"; exit 1; }
           done
           {
-            echo "Hermes Local engine payload: Hermes Agent ${{ inputs.hermes_ref }}, Ubuntu 24.04, antigravity-oauth plugin, agy CLI, voice (edge-tts, cloud speech-to-text from the user's OpenAI/Gemini key, live voice bridge: GPT-Live via ChatGPT/Codex sign-in or Gemini Live; no local Whisper)."
+            echo "Hermes Local engine payload (tar + zstd -19 --long=27; slim: one dependency generation, no .git/node_modules/tests/TUI/desktop/gcc): Hermes Agent ${{ inputs.hermes_ref }}, Ubuntu 24.04, antigravity-oauth plugin, agy CLI, voice (edge-tts, cloud speech-to-text from the user's OpenAI/Gemini key, live voice bridge: GPT-Live via ChatGPT/Codex sign-in or Gemini Live; no local Whisper)."
             echo
-            for f in out/rootfs-*.tar.xz; do echo "- \`$(basename "$f")\`: $(( $(stat -c %s "$f") / 1048576 )) MiB, sha256 \`$(cut -d' ' -f1 "$f.sha256")\`"; done
+            for f in out/rootfs-*.tar.zst; do a=$(basename "$f" .tar.zst); a=${a#rootfs-}; echo "- \`$(basename "$f")\`: $(( $(stat -c %s "$f") / 1048576 )) MiB, sha256 \`$(cut -d' ' -f1 "$f.sha256")\`, installed $(( $(jq .installed_disk_bytes "out/engine-$a.json") / 1048576 )) MiB"; done
             echo
             echo "Smoke tests: $(cat out/smoke-*.txt 2>/dev/null | tr '\n' ' ')"
             echo "x86_64 is for the CI emulator only. Built by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
@@ -144,5 +147,5 @@ jobs:
             gh release upload "$TAG" out/* --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" out/* --title "Engine ${TAG#engine-}" --notes-file notes.md --latest=false --repo "$GITHUB_REPOSITORY"
+            gh release create "$TAG" out/* --target "$GITHUB_SHA" --title "Engine ${TAG#engine-}" --notes-file notes.md --latest=false --repo "$GITHUB_REPOSITORY"
           fi

@@ -12,7 +12,7 @@ set -u
 export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools PYTHONUNBUFFERED=1
 export PATH=/opt/hermes-local/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export BROWSER=echo                  # never try to open a browser in proot; the app opens the URL
-export AGY_CLI_DISABLE_AUTO_UPDATE=1 # the engine is updated as a whole, never agy by itself
+export AGY_CLI_DISABLE_AUTO_UPDATE=true # agy ignores =1 (antigravity-cli#1046); the engine is updated as a whole
 [ -r /etc/ssl/certs/ca-certificates.crt ] && export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 BIN=/opt/hermes-local/bin
 

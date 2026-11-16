@@ -42,6 +42,9 @@ import kotlinx.coroutines.launch
 enum class LeverMode { Off, Starting, Running, Stopping, Failed }
 
 /**
+ * Hermes Local's two-position throttle lever (approved by Syed 2026-11-06), here drawn without its own
+ * quadrant: it sits on the M3 Expressive blob of the main screen.
+ *
  * Two-position cockpit throttle lever: down = off, up = on, nothing in between. Drag it (it snaps to the
  * nearer end on release, or follows a fling) or tap the quadrant. One haptic per switch. The only light
  * is a small status glow in the grip and at the top stop (accent when on). Lever position is read only in
@@ -69,12 +72,13 @@ fun ThrottleLever(
     }
 
     val scheme = MaterialTheme.colorScheme
+    val status = MaterialTheme.status
     val accent by animateColorAsState(
         when (mode) {
             LeverMode.Off -> scheme.outline
-            LeverMode.Starting, LeverMode.Stopping -> StatusColors.Amber
-            LeverMode.Running -> scheme.primary
-            LeverMode.Failed -> StatusColors.Red
+            LeverMode.Starting, LeverMode.Stopping -> status.busy
+            LeverMode.Running -> status.on
+            LeverMode.Failed -> status.failed
         },
         animationSpec = tween(300), label = "leverAccent",
     )
@@ -151,7 +155,6 @@ fun ThrottleLever(
             },
     ) {
         val p = pos.value
-        drawQuadrant(scheme.surfaceContainerHigh, scheme.surfaceContainerLowest, scheme.outlineVariant)
         val slotTop = size.height * (0.5f - TRAVEL / 2f)
         val slotBottom = size.height * (0.5f + TRAVEL / 2f)
         val cx = size.width * 0.5f
@@ -165,16 +168,6 @@ fun ThrottleLever(
 /** Light, quick snap: a touch of overshoot, settles in ~250 ms. */
 private val SNAP = spring<Float>(dampingRatio = 0.7f, stiffness = 420f)
 private const val TRAVEL = 0.62f
-
-private fun DrawScope.drawQuadrant(top: Color, bottom: Color, edge: Color) {
-    val r = CornerRadius(40.dp.toPx())
-    drawRoundRect(Brush.verticalGradient(listOf(top, bottom)), cornerRadius = r)
-    drawRoundRect(edge.copy(alpha = 0.45f), cornerRadius = r, style = Stroke(1.dp.toPx()))
-    drawRoundRect(
-        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.06f), Color.Transparent), endY = size.height * 0.25f),
-        cornerRadius = r,
-    )
-}
 
 /** The gate the lever rides in, with a small glow at the top (ON) stop. */
 private fun DrawScope.drawSlot(cx: Float, top: Float, bottom: Float, accent: Color, glow: Float) {

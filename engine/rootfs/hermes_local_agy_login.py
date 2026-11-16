@@ -73,7 +73,7 @@ def models_ok():
 
 
 def main() -> int:
-    os.environ.setdefault("AGY_CLI_DISABLE_AUTO_UPDATE", "1")
+    os.environ["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"  # agy ignores "1" (antigravity-cli#1046)
     if token_present():
         ok, detail = models_ok()
         if ok:

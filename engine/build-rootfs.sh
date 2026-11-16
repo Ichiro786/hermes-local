@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds the Hermes Local engine payload: an Ubuntu 24.04 rootfs with Hermes Agent installed by its
 # official installer, the antigravity-oauth plugin, Google's agy CLI and the hermes-local helper
-# scripts, packed as rootfs-<arch>.tar.xz for PRoot on Android.
+# scripts, packed as rootfs-<arch>.tar.zst for PRoot on Android.
 #
 # Runs as root on an Ubuntu host of the target arch (ubuntu-24.04-arm for arm64, ubuntu-24.04 for
 # x86_64, which only the CI emulator uses). Approach copied from OpenBot Local's engine/build-rootfs.sh.
@@ -10,10 +10,13 @@
 #   /opt/hermes/hermes-agent   Hermes checkout + venv (code; replaced by engine updates)
 #   /opt/hermes/tools          pm-managed node/uv/etc. (HERMES_RUNTIME_DIR)
 #   /opt/hermes-local/bin      our start/passwd/auth/status scripts (on PATH via /usr/local/bin)
-#   /root/.hermes              HERMES_HOME: config, auth, plugins, sessions (user data; kept on update)
+#   /root/.hermes              HERMES_HOME: config, auth, plugins, sessions (user data; the app carries an
+#                              allow-list of it over on update). Its installs/ (the one dependency generation)
+#                              and cache/ belong to the engine and are never carried over.
 #
 # Env: OUT_DIR, WORK_DIR, HERMES_REF (tag, default v0.23.0), HERMES_COMMIT (sha of that tag),
-#      ENGINE_REVISION, GIT_SHA, XZ_LEVEL (default 7: multithreaded within memory), WITH_AGY (default 1)
+#      ENGINE_REVISION, GIT_SHA, ZSTD_LEVEL (default 19, --long=27), WITH_AGY (default 1),
+#      SIZE_LIMIT (bytes installed on the phone, default 2200000000: the build fails above it)
 set -euo pipefail
 export LC_ALL=C DEBIAN_FRONTEND=noninteractive
 
@@ -23,7 +26,8 @@ WORK_DIR=$(realpath -m "${WORK_DIR:-./build}")
 ROOTFS="$WORK_DIR/rootfs"
 HERMES_REF="${HERMES_REF:-v0.23.0}"
 HERMES_COMMIT="${HERMES_COMMIT:-}"
-XZ_LEVEL="${XZ_LEVEL:-7}"
+ZSTD_LEVEL="${ZSTD_LEVEL:-19}"
+SIZE_LIMIT="${SIZE_LIMIT:-2200000000}"
 WITH_AGY="${WITH_AGY:-1}"
 UBUNTU_BASE_DIR="${UBUNTU_BASE_DIR:-https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release}"
 
@@ -54,7 +58,7 @@ in_root() { # runs a bash snippet in the chroot with a clean env
   chroot "$ROOTFS" /usr/bin/env -i HOME=/root USER=root LANG=C.UTF-8 TERM=dumb \
     PATH=/opt/hermes-local/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools DEBIAN_FRONTEND=noninteractive \
-    CI=1 bash -euo pipefail -c "$1"
+    AGY_CLI_DISABLE_AUTO_UPDATE=true CI=1 bash -euo pipefail -c "$1"
 }
 
 rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR" "$OUT_DIR"
@@ -139,6 +143,31 @@ in_root "hermes pm install --extra edge-tts </dev/null 2>&1 | grep -v '^ *$' | t
 # build: +104 MiB for edge-tts); pm gc drops generations and store entries nothing references.
 in_root "hermes pm gc </dev/null 2>&1 | tail -n 3" || echo "::warning::hermes pm gc failed"
 rm -rf "$ROOTFS/root/.cache"
+# One sealed dependency environment (what Hermes' Docker image ships): pm gc keeps superseded generations
+# (engine-v0.23.1-1: a second 348 MiB env that differs only by edge-tts), so keep the generation facts.json
+# selects (and pm-runtime's selected generation) and delete the rest.
+python3 - "$ROOTFS" <<'PY'
+import json, pathlib, shutil, sys
+root = pathlib.Path(sys.argv[1])
+stores = list((root / "root/.hermes/installs").glob("*/facts.json"))
+assert stores, "no pm store (root/.hermes/installs/*/facts.json)"
+for facts in stores:
+    store = facts.parent
+    venv = json.loads(facts.read_text())["packages"]["venv"]
+    keep = pathlib.PurePosixPath(venv["environment"]).parent.name  # .../environments/<id>/venv
+    assert (store / "environments" / keep / "venv").is_dir(), f"selected env {keep} missing"
+    for d in (store / "environments").iterdir():
+        if d.name != keep:
+            print("dependency generation: dropping superseded", d.name); shutil.rmtree(d)
+    sel = store / "pm-runtime/selected.json"
+    if sel.is_file():
+        gen = pathlib.PurePosixPath(json.loads(sel.read_text())["generation"]).name
+        for d in (store / "pm-runtime/generations").iterdir():
+            if d.name != gen:
+                print("pm runtime: dropping superseded", d.name); shutil.rmtree(d)
+    print("dependency generation kept:", keep, "extras", venv.get("extras"))
+PY
+[ "$(find "$ROOTFS"/root/.hermes/installs/*/environments -mindepth 1 -maxdepth 1 -type d | wc -l)" = 1 ] || fail "expected exactly one dependency generation"
 du -sh "$ROOTFS"/root/.hermes/* "$ROOTFS"/root/.hermes/cache/* 2>/dev/null | sort -h | tail -n 8 || true
 # uv's wheel cache (~300 MB) is only a download cache: the dependency environments hold their own (hard-linked)
 # copies, and the packed tar stores hard links twice (--hard-dereference). Drop it unless something symlinks
@@ -223,7 +252,7 @@ for kind in gemini codex; do
   mkdir -p "$OUT_DIR/captures-$ASSET_ARCH" && cp "$WORK_DIR/live-fake-$kind.txt" "$OUT_DIR/captures-$ASSET_ARCH/build-live-fake-$kind.txt"
   grep -q '^LIVE_RESULT ok' "$WORK_DIR/live-fake-$kind.txt" || fail "live bridge self-test ($kind) failed"
 done
-in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import sys, hermes_bootstrap; sys.path.append(\"/opt/hermes-local/live-libs\"); import aiortc, av; print(\"aiortc\", aiortc.__version__, \"av\", av.__version__)'" | tee "$WORK_DIR/live-versions.txt"
+in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import sys, hermes_bootstrap; sys.path.append(\"/opt/hermes-local/live-libs\"); import aiortc, av, os; print(\"aiortc\", aiortc.__version__, \"av\", av.__version__, flush=True); os._exit(0)'" | tee "$WORK_DIR/live-versions.txt"
 # Gemini TTS: Google's current models (gemini-3.8-flash[-lite]-tts) answer generateContent with a complete
 # WAV, while Hermes v0.23.0 always wraps the reply as raw PCM (WAV-in-WAV: a header-sized click). One-line
 # patch: keep a reply that already is RIFF/WAVE as it is. Fails the build if the upstream line moved.
@@ -251,13 +280,19 @@ endstep
 
 if [ "$WITH_AGY" = 1 ]; then
   step "Google agy CLI"
+  # agy updates itself on first use (+489 MiB on the probe: new binary + agy.<n>.old). It honours only
+  # AGY_CLI_DISABLE_AUTO_UPDATE=true (not =1, antigravity-cli#1046) and "update.mode": "none" in its settings.
+  install -d -m 0700 "$ROOTFS/root/.gemini/antigravity-cli"
+  printf '{\n  "update.mode": "none"\n}\n' >"$ROOTFS/root/.gemini/antigravity-cli/settings.json"
   fetch -o "$ROOTFS/tmp/agy-install.sh" https://antigravity.google/cli/install.sh
   in_root "bash /tmp/agy-install.sh --dir /usr/local/bin </dev/null" || echo "::warning::agy install failed"
   # agy's installer also copies itself to ~/.local/bin (240 MB each): keep one binary.
   if [ -f "$ROOTFS/root/.local/bin/agy" ] && [ ! -L "$ROOTFS/root/.local/bin/agy" ] && [ -f "$ROOTFS/usr/local/bin/agy" ]; then
     if cmp -s "$ROOTFS/root/.local/bin/agy" "$ROOTFS/usr/local/bin/agy"; then ln -sfn /usr/local/bin/agy "$ROOTFS/root/.local/bin/agy"; fi
   fi
-  in_root "ls -l /usr/local/bin/agy /root/.local/bin/agy 2>&1; (AGY_CLI_DISABLE_AUTO_UPDATE=1 timeout 30 agy --version || true)" || echo "::warning::agy not runnable"
+  in_root "ls -l /usr/local/bin/agy /root/.local/bin/agy 2>&1; (AGY_CLI_DISABLE_AUTO_UPDATE=true timeout 30 agy --version || true)" || echo "::warning::agy not runnable"
+  cat "$ROOTFS/root/.gemini/antigravity-cli/settings.json"
+  grep -q '"update.mode": *"none"' "$ROOTFS/root/.gemini/antigravity-cli/settings.json" || fail "agy settings lost update.mode none"
   endstep
 fi
 
@@ -331,7 +366,7 @@ printf 'hermes-local\n' >"$ROOTFS/etc/hostname"
 : >"$ROOTFS/etc/machine-id"
 for f in "$ROOTFS"/opt/hermes-local/bin/*; do ln -sfn "/opt/hermes-local/bin/$(basename "$f")" "$ROOTFS/usr/local/bin/$(basename "$f")"; done
 hermes_version=$(in_root "hermes --version 2>/dev/null | head -n1" || echo unknown)
-agy_version=$(in_root "timeout 30 agy --version 2>/dev/null | head -n1" || echo none)
+agy_version=$(in_root "AGY_CLI_DISABLE_AUTO_UPDATE=true timeout 30 agy --version 2>/dev/null | head -n1" || echo none)
 cat >"$ROOTFS/opt/hermes-local/engine-version" <<EOF
 hermes_ref=$HERMES_REF
 hermes_commit=${HERMES_COMMIT:-}
@@ -346,6 +381,34 @@ git=${GIT_SHA:-unknown}
 revision=${ENGINE_REVISION:-0}
 EOF
 cat "$ROOTFS/opt/hermes-local/engine-version"
+endstep
+
+step "Slim (Docker-style: only what runs on the phone)"
+H="$ROOTFS/opt/hermes/hermes-agent"
+before=$(du -sx -B1 -l "$ROOTFS" | cut -f1)
+# Build/dev-only trees (Hermes' Docker image ships none of them; measured safe in optimize-research slim A+B):
+# .git (also grew +173 MiB at runtime), web/TUI/desktop build deps, tests, docs, the desktop app and the TUI,
+# install.sh's pnpm store (+ the rest of cache/), uv's own CPython (both envs use /opt/hermes/tools/python-*), ffplay.
+rm -rf "$H/.git" "$H/node_modules" "$H/tests" "$H/tests-js" "$H/evals" "$H/website" "$H/docs" "$H/contributors" \
+  "$H/apps" "$H/ui-tui" "$ROOTFS/root/.hermes/cache" "$ROOTFS/root/.local/share/uv" "$ROOTFS"/opt/hermes/tools/ffmpeg-*/bin/ffplay
+# C toolchain + headers (187 MiB): only plugin installs that build an sdist need them; nothing core does.
+rm -rf "$ROOTFS/usr/libexec/gcc" "$ROOTFS/usr/lib/gcc" "$ROOTFS/usr/include" "$ROOTFS"/usr/lib/python3.12/config-3.12-* \
+  "$ROOTFS"/usr/bin/*-linux-gnu-lto-dump-* "$ROOTFS"/usr/lib/*-linux-gnu/*.a
+# Google API discovery docs: keep the Workspace/YouTube APIs (216 MiB -> a few MiB); other APIs still work with
+# static_discovery=False (fetched from the network).
+find "$ROOTFS/root/.hermes/installs" "$ROOTFS/opt" -path '*googleapiclient/discovery_cache/documents/*.json' \
+  ! -name 'gmail.v1.json' ! -name 'calendar.v3.json' ! -name 'drive.v3.json' ! -name 'docs.v1.json' ! -name 'sheets.v4.json' \
+  ! -name 'slides.v1.json' ! -name 'people.v1.json' ! -name 'tasks.v1.json' ! -name 'forms.v1.json' ! -name 'youtube.v3.json' -delete
+rm -f "$ROOTFS"/usr/local/bin/agy.*.old "$ROOTFS"/root/.local/bin/agy.*.old
+bind_mount /proc "$ROOTFS/proc"; bind_mount /dev "$ROOTFS/dev"
+in_root "hermes --version | head -n 2"
+in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap, edge_tts, googleapiclient.discovery, fastapi; print(\"imports ok\")'"
+# Valid timestamp .pycs for the Hermes tree and live-libs: the app now restores mtimes, so they stay valid on the
+# phone (v1.0.0-test4's first boot recompiled ~2,000 modules because every mtime was "now").
+in_root "/bin/bash /opt/hermes-local/bin/hermes-py -m compileall -q /opt/hermes/hermes-agent /opt/hermes-local/live-libs >/dev/null 2>&1 || true"
+cleanup_mounts
+after=$(du -sx -B1 -l "$ROOTFS" | cut -f1)
+echo "slim: $(( (before - after) / 1048576 )) MiB removed (net of added pyc), $(( after / 1048576 )) MiB left"
 endstep
 
 step "Shrink"
@@ -365,15 +428,22 @@ mkdir -p "$ROOTFS/tmp" "$ROOTFS/var/tmp" "$ROOTFS/var/log" "$ROOTFS/var/lib/apt/
 chmod 1777 "$ROOTFS/tmp" "$ROOTFS/var/tmp"
 endstep
 
-step "Pack rootfs-$ASSET_ARCH.tar.xz"
-asset="rootfs-$ASSET_ARCH.tar.xz"
-# --hard-dereference: Android's app domain cannot create hard links.
+step "Pack rootfs-$ASSET_ARCH.tar.zst"
+asset="rootfs-$ASSET_ARCH.tar.zst"
+# --hard-dereference: Android's app domain cannot create hard links, so the phone stores every link as a copy;
+# size it the same way (du -l counts every link). zstd -19 --long=27: smaller than xz -7 and the app's zstd-jni
+# decodes it ~11x faster (optimize-research section 3).
+installed=$(du -sb -l "$ROOTFS" | cut -f1)
+installed_disk=$(du -s -B1 -l "$ROOTFS" | cut -f1)
+entries=$(find "$ROOTFS" -xdev | wc -l)
+echo "installed: $installed B apparent, $installed_disk B on disk (4 KiB blocks), $entries entries; limit $SIZE_LIMIT B"
+du -sx -B1M -l "$ROOTFS"/opt/hermes/* "$ROOTFS"/opt/hermes-local "$ROOTFS"/root/.hermes/* "$ROOTFS"/usr/local/bin/agy "$ROOTFS"/usr 2>/dev/null | sort -n | tail -n 12
+[ "$installed_disk" -le "$SIZE_LIMIT" ] || fail "installed size $installed_disk B is above the limit ($SIZE_LIMIT B)"
 tar -C "$ROOTFS" --numeric-owner --owner=0 --group=0 --hard-dereference --sort=name \
-  --exclude='./dev/*' --exclude='./proc/*' --exclude='./sys/*' -cf - . | xz -T0 --memlimit-compress=60% "-$XZ_LEVEL" --check=crc64 >"$OUT_DIR/$asset"
+  --exclude='./dev/*' --exclude='./proc/*' --exclude='./sys/*' -cf - . | zstd -q -T0 "-$ZSTD_LEVEL" --long=27 >"$OUT_DIR/$asset"
 (cd "$OUT_DIR" && sha256sum "$asset" >"$asset.sha256")
 sha=$(cut -d' ' -f1 "$OUT_DIR/$asset.sha256")
 compressed=$(stat -c %s "$OUT_DIR/$asset")
-installed=$(du -sb "$ROOTFS" | cut -f1)
 cat >"$OUT_DIR/engine-$ASSET_ARCH.json" <<EOF
 {
   "name": "hermes-local-engine",
@@ -382,9 +452,12 @@ cat >"$OUT_DIR/engine-$ASSET_ARCH.json" <<EOF
   "agy": "$agy_version",
   "arch": "$ASSET_ARCH",
   "asset": "$asset",
+  "format": "tar+zstd --long=27",
   "sha256": "$sha",
   "compressed_bytes": $compressed,
   "installed_bytes": $installed,
+  "installed_disk_bytes": $installed_disk,
+  "entries": $entries,
   "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "git": "${GIT_SHA:-unknown}"
 }

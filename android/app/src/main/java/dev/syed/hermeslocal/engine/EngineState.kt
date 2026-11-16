@@ -17,6 +17,10 @@ data class EngineStatus(
     val installStage: String? = null,
     /** 0..1, or -1 when indeterminate. */
     val installProgress: Float = -1f,
+    /** PowerManager.THERMAL_STATUS_* (0 = none). */
+    val thermal: Int = 0,
+    /** Why the CPU is kept awake right now, or null when it may sleep. */
+    val awake: String? = null,
 ) {
     val isOn get() = phase == Phase.Starting || phase == Phase.Running
     val localUrl get() = "http://127.0.0.1:$port"
