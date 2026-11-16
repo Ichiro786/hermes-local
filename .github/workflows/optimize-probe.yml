@@ -1,0 +1,43 @@
+name: Optimize probe (research)
+
+# Research only: measures the engine payload's size, unpack speed, boot time and idle cost on a native arm64
+# runner the way the app runs it (engine/optim/probe.sh). Runs on pushes to research/optimize only; publishes nothing.
+
+on:
+  push:
+    branches: [research/optimize]
+    paths: [engine/optim/**, .github/workflows/optimize-probe.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 170
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Host tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils zstd jq bc strace libtalloc-dev gawk
+      - name: Build proot (termux/proot, the phone's proot)
+        run: |
+          git clone -q --depth 1 https://github.com/termux/proot "$RUNNER_TEMP/proot-src"
+          make -s -C "$RUNNER_TEMP/proot-src/src" -j"$(nproc)" HAS_LOADER_32BIT= proot
+          "$RUNNER_TEMP/proot-src/src/proot" --version | head -n 3 || true
+      - name: Probe
+        run: |
+          mkdir -p out
+          sudo -E env "PATH=$PATH" OUT="$PWD/out" PROOT="$RUNNER_TEMP/proot-src/src/proot" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            bash engine/optim/probe.sh 2>&1 | tee out/probe.log
+          sudo chown -R "$(id -u)" out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: optimize-probe
+          path: out/
