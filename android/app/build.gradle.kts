@@ -123,6 +123,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("com.google.android.material:material:1.12.0") // color.utilities: seed -> Material You scheme for previews
     testImplementation("io.github.takahirom.roborazzi:roborazzi:1.77.0")
     testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.77.0")
     testImplementation("androidx.compose.ui:ui-test-junit4")

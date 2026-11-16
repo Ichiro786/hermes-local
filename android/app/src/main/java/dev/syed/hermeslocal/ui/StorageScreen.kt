@@ -53,9 +53,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val PartColors = listOf(
-    Color(0xFFD7BFFA), Color(0xFF8FD99A), Color(0xFF7FC8F8), Color(0xFFFFB95C), Color(0xFFFF8A80), Color(0xFFB4ADBC), Color(0xFFFF6B63),
-)
+/** One distinct colour per part, all from the theme (engine, deps, sessions, agy, caches, logs, leftovers). */
+@Composable
+private fun partColors(): List<Color> {
+    val c = MaterialTheme.colorScheme
+    return listOf(c.primary, c.tertiary, c.secondary, MaterialTheme.status.busy, c.inversePrimary, c.outline, c.error)
+}
 
 /** What the app's data is made of, plus "Clean up" (engine stopped) and "Reset". */
 @Composable
@@ -83,10 +86,11 @@ fun StorageScreen(status: EngineStatus, onBack: () -> Unit) {
                 } else Column(Modifier.padding(20.dp).animateContentSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(bytesLabel(r.total), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Medium)
                     Text("App data on this phone", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    UsageBar(r)
+                    val colors = partColors()
+                    UsageBar(r, colors)
                     r.parts.forEachIndexed { i, p ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Canvas(Modifier.size(10.dp)) { drawCircle(PartColors[i % PartColors.size]) }
+                            Canvas(Modifier.size(10.dp)) { drawCircle(colors[i % colors.size]) }
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(p.label, style = MaterialTheme.typography.titleSmall)
@@ -112,8 +116,8 @@ fun StorageScreen(status: EngineStatus, onBack: () -> Unit) {
                     },
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                if (on) Text("Stop Hermes with the lever first.", style = MaterialTheme.typography.bodySmall, color = StatusColors.Amber)
-                notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = StatusColors.Green) }
+                if (on) Text("Stop Hermes with the lever first.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.status.busy)
+                notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.status.on) }
                 Button(
                     onClick = {
                         working = true; notice = null
@@ -145,7 +149,7 @@ fun StorageScreen(status: EngineStatus, onBack: () -> Unit) {
                 FilledTonalButton(
                     onClick = { confirmReset = true }, enabled = !working && !installing,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shapes = ButtonDefaults.shapes(),
-                ) { Text("Reset everything", color = StatusColors.Red) }
+                ) { Text("Reset everything", color = MaterialTheme.colorScheme.error) }
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -158,7 +162,7 @@ fun StorageScreen(status: EngineStatus, onBack: () -> Unit) {
 
 /** One stacked bar of the parts; widths animate in after each scan. */
 @Composable
-private fun UsageBar(r: Storage.Report) {
+private fun UsageBar(r: Storage.Report, colors: List<Color>) {
     val sum = r.parts.sumOf { it.bytes }.coerceAtLeast(1L).toFloat()
     val grow = remember(r) { Animatable(0f) }
     LaunchedEffect(r) { grow.animateTo(1f, spring(dampingRatio = 0.8f, stiffness = 200f)) }
@@ -168,7 +172,7 @@ private fun UsageBar(r: Storage.Report) {
         var x = 0f
         r.parts.forEachIndexed { i, p ->
             val w = size.width * (p.bytes / sum) * grow.value // read in draw only: the bar grows without recomposing
-            if (w > 0.5f) drawRoundRect(PartColors[i % PartColors.size], Offset(x, 0f), Size(w, size.height), CornerRadius(size.height / 2))
+            if (w > 0.5f) drawRoundRect(colors[i % colors.size], Offset(x, 0f), Size(w, size.height), CornerRadius(size.height / 2))
             x += w
         }
     }

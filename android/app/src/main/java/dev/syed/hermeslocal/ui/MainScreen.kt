@@ -120,9 +120,9 @@ fun MainScreen(status: EngineStatus, settings: SettingsSnapshot, onNavigate: (Sc
                     // The M3 Expressive cookie behind the lever takes the engine's colour (green running, amber busy).
                     val blob by animateColorAsState(
                         when (status.phase) {
-                            Phase.Running -> StatusColors.GreenBlob
-                            Phase.Starting, Phase.Stopping -> Color(0xFF3A3326)
-                            Phase.Failed -> Color(0xFF3D2427)
+                            Phase.Running -> MaterialTheme.status.onBlob
+                            Phase.Starting, Phase.Stopping -> MaterialTheme.status.busyBlob
+                            Phase.Failed -> MaterialTheme.status.failedBlob
                             else -> MaterialTheme.colorScheme.surfaceContainerHigh
                         },
                         tween(450), label = "blob",
@@ -174,11 +174,11 @@ private fun RoundIcon(icon: ImageVector, label: String, enabled: Boolean = true,
 @Composable
 private fun StatusLine(status: EngineStatus) {
     val (label, color) = when (status.phase) {
-        Phase.Running -> "Running" to StatusColors.Green
-        Phase.Starting -> "Starting" to StatusColors.Amber
-        Phase.Stopping -> "Stopping" to StatusColors.Amber
-        Phase.Failed -> "Stopped with an error" to StatusColors.Red
-        Phase.Installing -> "Setting up" to StatusColors.Amber
+        Phase.Running -> "Running" to MaterialTheme.status.on
+        Phase.Starting -> "Starting" to MaterialTheme.status.busy
+        Phase.Stopping -> "Stopping" to MaterialTheme.status.busy
+        Phase.Failed -> "Stopped with an error" to MaterialTheme.status.failed
+        Phase.Installing -> "Setting up" to MaterialTheme.status.busy
         Phase.NotInstalled -> "Engine not installed" to MaterialTheme.colorScheme.outline
         Phase.Stopped -> "Server off" to MaterialTheme.colorScheme.outline
     }
@@ -195,7 +195,7 @@ private fun StatusLine(status: EngineStatus) {
 @Composable
 private fun DashboardCard(status: EngineStatus, onOpenHermes: () -> Unit, onOpenDashboard: () -> Unit) {
     val running = status.phase == Phase.Running
-    val container by animateColorAsState(if (running) Color(0xFF1C2A1F) else MaterialTheme.colorScheme.surfaceContainer, tween(450), label = "card")
+    val container by animateColorAsState(if (running) MaterialTheme.status.onCard else MaterialTheme.colorScheme.surfaceContainer, tween(450), label = "card")
     Card(
         Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(32.dp),
         colors = CardDefaults.cardColors(containerColor = container, contentColor = MaterialTheme.colorScheme.onSurface),
@@ -227,7 +227,7 @@ private fun DashboardCard(status: EngineStatus, onOpenHermes: () -> Unit, onOpen
                 }
             }
             val chips = buildList {
-                if (status.thermal >= 1) add(Triple(Icons.Rounded.Thermostat, thermalLabel(status.thermal), if (status.thermal >= 2) StatusColors.Amber else null))
+                if (status.thermal >= 1) add(Triple(Icons.Rounded.Thermostat, thermalLabel(status.thermal), if (status.thermal >= 2) MaterialTheme.status.busy else null))
                 if (running) add(Triple(if (status.awake != null) Icons.Rounded.Bolt else Icons.Rounded.Bedtime, status.awake ?: "CPU may sleep", null))
             }
             if (chips.isNotEmpty()) FlowRow(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -252,7 +252,7 @@ private fun DashboardCard(status: EngineStatus, onOpenHermes: () -> Unit, onOpen
             }
             status.message?.takeIf { status.phase != Phase.NotInstalled && status.phase != Phase.Installing }?.let {
                 Text(it, Modifier.padding(top = 10.dp, start = 4.dp), style = MaterialTheme.typography.bodyMedium,
-                    color = if (status.phase == Phase.Failed) StatusColors.Red else MaterialTheme.colorScheme.onSurfaceVariant)
+                    color = if (status.phase == Phase.Failed) MaterialTheme.status.failed else MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.height(14.dp))
             val client = remember(running) { AppController.installedClient() }
@@ -305,7 +305,7 @@ private fun Uptime(since: Long) {
         val s = ((now - since) / 1000).coerceAtLeast(0)
         if (s >= 3600) "%dh %02dm".format(s / 3600, s / 60 % 60) else "%dm %02ds".format(s / 60, s % 60)
     }
-    Text(text, style = MaterialTheme.typography.headlineSmall, color = StatusColors.Green, fontWeight = FontWeight.Medium)
+    Text(text, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.status.on, fontWeight = FontWeight.Medium)
 }
 
 @Composable
@@ -335,7 +335,7 @@ private fun InstallCard(status: EngineStatus) {
                 } else LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth())
             } else {
                 Text("Engine not installed", style = MaterialTheme.typography.titleMedium)
-                status.message?.let { Text(it, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium, color = StatusColors.Red) }
+                status.message?.let { Text(it, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.status.failed) }
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(onClick = { AppController.downloadEngine() }, shapes = ButtonDefaults.shapes()) { Text(if (status.message != null) "Retry download" else "Download") }
@@ -371,7 +371,7 @@ private fun PasswordCard(defaultUser: String) {
                 visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 isError = pw2.isNotEmpty() && pw2 != pw,
             )
-            error?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
+            error?.let { Text(it, color = MaterialTheme.status.failed, style = MaterialTheme.typography.bodySmall) }
             Button(
                 onClick = {
                     busy = true; error = null

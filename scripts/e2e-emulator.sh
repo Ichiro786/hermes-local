@@ -308,6 +308,32 @@ screen storage 8; snap 34-storage-running
 check "no agy self-update (no agy.*.old, settings update.mode none)" "$(! appsh 'ls files/r/usr/local/bin/' | grep -q 'agy\..*\.old' && appsh 'cat files/r/root/.gemini/antigravity-cli/settings.json' | grep -q '"update.mode": *"none"' && echo 1 || echo 0)"
 appsh "ls -la files/r/usr/local/bin/ | grep agy" | tee -a "$OUT/checks.txt"
 
+echo "== theming (test6): Material You with three wallpaper seeds, AMOLED and dark, then dynamic colour off"
+T="$OUT/theme"; mkdir -p "$T"
+tsnap() { adb exec-out screencap -p >"$T/$1.png"; }
+palette() { # palette <RRGGBB>: what the wallpaper picker writes; SystemUI re-themes and the activity is recreated
+  adb shell "settings put secure theme_customization_overlay_packages '{\"android.theme.customization.system_palette\":\"$1\",\"android.theme.customization.theme_style\":\"TONAL_SPOT\",\"android.theme.customization.color_source\":\"preset\",\"_applied_timestamp\":$(date +%s)000}'"
+  sleep 8
+}
+adb shell settings get secure theme_customization_overlay_packages | tee "$T/palette-before.txt"
+for seed in 1E6FD9 E0711A C2185B; do
+  palette $seed
+  adb shell settings get secure theme_customization_overlay_packages >>"$T/palette-set.txt"
+  for am in true false; do
+    adb shell am start -n $PKG/.MainActivity --ez ci_dynamic true --ez ci_amoled $am -e ci_screen main >/dev/null; sleep 3
+    tsnap "main-$seed-amoled_$am"
+    screen settings 2; tsnap "settings-$seed-amoled_$am"
+    screen storage 6; tsnap "storage-$seed-amoled_$am"
+  done
+  screen providers 3; tsnap "providers-$seed-amoled_false"
+done
+for am in true false; do
+  adb shell am start -n $PKG/.MainActivity --ez ci_dynamic false --ez ci_amoled $am -e ci_screen main >/dev/null; sleep 3
+  tsnap "main-nodynamic-amoled_$am"; screen settings 2; tsnap "settings-nodynamic-amoled_$am"
+done
+adb shell am start -n $PKG/.MainActivity --ez ci_dynamic true --ez ci_amoled true -e ci_screen main >/dev/null; sleep 2
+check "theme screenshots taken (3 seeds x AMOLED/dark + dynamic off)" "$([ "$(ls "$T"/*.png 2>/dev/null | wc -l)" -ge 25 ] && echo 1 || echo 0)"
+
 echo "== lever off, then a plugin with Python deps, then Storage > Clean up"
 adb shell screenrecord --time-limit 40 /sdcard/lever-off.mp4 &
 REC=$!; sleep 2

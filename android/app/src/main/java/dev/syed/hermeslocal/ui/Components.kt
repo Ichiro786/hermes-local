@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -35,11 +37,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 
 /**
@@ -56,9 +61,21 @@ fun ScreenFrame(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
+        // The corner cookie takes the theme's primaryContainer (Material You when dynamic colour is on) and fades out
+        // above the bottom of the status bar, so the status-bar icons sit on the plain background.
+        val density = LocalDensity.current
+        val statusBar = WindowInsets.statusBars.getTop(density).toFloat()
+        val color = MaterialTheme.colorScheme.primaryContainer
+        val fade = remember(color, statusBar, density) {
+            val top = with(density) { BLOB_LIFT.toPx() } // the blob's own y of the screen's top edge
+            Brush.verticalGradient(
+                listOf(Color.Transparent, color),
+                startY = top + statusBar * 0.6f, endY = top + statusBar + with(density) { 20.dp.toPx() },
+            )
+        }
         Box(
-            Modifier.align(Alignment.TopEnd).offset(x = 70.dp, y = (-115).dp).size(225.dp)
-                .background(CornerBlob, MaterialShapes.Cookie6Sided.toShape()),
+            Modifier.align(Alignment.TopEnd).offset(x = 70.dp, y = -BLOB_LIFT).size(225.dp)
+                .background(fade, MaterialShapes.Cookie6Sided.toShape()),
         )
         Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -80,8 +97,8 @@ fun ScreenFrame(
     }
 }
 
-/** The lavender corner shape behind the title of Settings/Providers/Storage/Logs (fixed, like the reference). */
-val CornerBlob = Color(0xFF6E5A9C)
+/** How far the corner cookie of Settings/Providers/Storage/Logs sits above the screen's top edge. */
+private val BLOB_LIFT = 115.dp
 
 @Composable
 fun SectionChip(icon: ImageVector, label: String) {

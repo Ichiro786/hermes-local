@@ -65,9 +65,9 @@ fun LogsScreen(onBack: () -> Unit) {
                         Text(
                             line, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 14.sp,
                             color = when {
-                                line.contains("FAILED") || line.contains("Error") || line.contains("Traceback") -> StatusColors.Red
-                                line.startsWith("HERMES_LOCAL_READY") -> StatusColors.Green
-                                line.startsWith("---") -> MaterialTheme.colorScheme.tertiary
+                                line.contains("FAILED") || line.contains("Error") || line.contains("Traceback") -> MaterialTheme.colorScheme.error
+                                line.startsWith("HERMES_LOCAL_READY") -> MaterialTheme.status.on
+                                line.startsWith("---") -> MaterialTheme.colorScheme.primary
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant
                             },
                         )

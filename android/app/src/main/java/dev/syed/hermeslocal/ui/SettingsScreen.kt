@@ -227,7 +227,7 @@ private fun PasswordDialog(username: String, onDismiss: () -> Unit) {
                 OutlinedTextField(pw2, { pw2 = it }, label = { Text("Confirm") }, singleLine = true, isError = pw2.isNotEmpty() && pw2 != pw,
                     visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
                 Text("Signed-in clients are signed out and must log in again.", style = MaterialTheme.typography.bodySmall)
-                error?.let { Text(it, color = StatusColors.Red, style = MaterialTheme.typography.bodySmall) }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },
         confirmButton = {

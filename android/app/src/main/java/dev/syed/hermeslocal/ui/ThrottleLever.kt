@@ -72,12 +72,13 @@ fun ThrottleLever(
     }
 
     val scheme = MaterialTheme.colorScheme
+    val status = MaterialTheme.status
     val accent by animateColorAsState(
         when (mode) {
             LeverMode.Off -> scheme.outline
-            LeverMode.Starting, LeverMode.Stopping -> StatusColors.Amber
-            LeverMode.Running -> StatusColors.Green
-            LeverMode.Failed -> StatusColors.Red
+            LeverMode.Starting, LeverMode.Stopping -> status.busy
+            LeverMode.Running -> status.on
+            LeverMode.Failed -> status.failed
         },
         animationSpec = tween(300), label = "leverAccent",
     )

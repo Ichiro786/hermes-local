@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * CI only (BuildConfig.CI_HOOKS): `am start -e ci_password X --ez ci_toggle true` sets up and flips the lever;
-     * `-e ci_screen providers` opens a screen; `-e ci_guest '<bash>'` runs a command in the engine and logs its
+     * `-e ci_screen providers` opens a screen; `--ez ci_amoled/ci_dynamic` set the theme; `-e ci_guest '<bash>'` runs a command in the engine and logs its
      * output (tag HermesLocalCI, prefix "guest:").
      */
     private fun handleCiHooks(intent: android.content.Intent?) {
@@ -65,6 +65,8 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.i("HermesLocalCI", "guest-exit: ${r.exitCode}")
             }
         }
+        if (intent.hasExtra("ci_amoled")) intent.getBooleanExtra("ci_amoled", true).let { v -> AppController.settings.update { copy(amoled = v) } }
+        if (intent.hasExtra("ci_dynamic")) intent.getBooleanExtra("ci_dynamic", true).let { v -> AppController.settings.update { copy(dynamicColor = v) } }
         val pw = intent.getStringExtra("ci_password")
         val toggle = if (intent.hasExtra("ci_toggle")) intent.getBooleanExtra("ci_toggle", false) else null
         AppController.scope.launch {
