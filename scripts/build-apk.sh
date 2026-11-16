@@ -48,5 +48,6 @@ out="$ROOT/out/hermes-local-$VERSION_NAME-$ABI.apk"
 cp app/build/outputs/apk/release/app-release.apk "$out"
 ls -l "$out"
 unzip -v "$out" | grep -E 'lib/.*/lib(proot|proot-loader|talloc|android-shmem|zstd-jni[^/]*)\.so' || true
-unzip -l "$out" | grep -q 'assets/engine/' && { echo "an engine payload got bundled" >&2; exit 1; }
-unzip -l "$out" | grep -qE "lib/$ABI/libzstd-jni" || { echo "zstd-jni native library missing for $ABI" >&2; exit 1; }
+unzip -l "$out" | grep 'assets/engine/' >/dev/null && { echo "an engine payload got bundled" >&2; exit 1; }
+# no grep -q here: it exits at the first match, unzip gets SIGPIPE and pipefail fails the build at random
+unzip -l "$out" | grep -E "lib/$ABI/libzstd-jni" >/dev/null || { echo "zstd-jni native library missing for $ABI" >&2; exit 1; }
