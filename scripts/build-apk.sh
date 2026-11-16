@@ -1,52 +1,52 @@
 #!/bin/bash
-# Builds the Hermes Local APK with the engine payload bundled.
-#   ENGINE_DIR=<dir with rootfs-<arch>.tar.xz + .sha256>  (required unless NO_ENGINE=1)
-#   ABI=arm64-v8a|x86_64 (default arm64-v8a)  ENGINE_TAG=engine-v0.23.0-3
-#   VERSION_NAME=1.0.0 VERSION_CODE=1  GRADLE=gradle (a Gradle 9.8+ binary)
+# Builds the Hermes Local APK. The engine is not bundled (since v1.0.0-test5): the app downloads
+# rootfs-<arch>.tar.zst from the engine release on first run and checks it against ENGINE_SHA256.
+#   ENGINE_TAG=engine-v0.23.1-2  ENGINE_SHA256=<sha of rootfs-<arch>.tar.zst> (or ENGINE_DIR=<dir with
+#   rootfs-<arch>.tar.zst.sha256>; else read from the release)
+#   ABI=arm64-v8a|x86_64 (default arm64-v8a)  VERSION_NAME=1.0.0 VERSION_CODE=1  GRADLE=gradle (Gradle 9.8+)
 #   Signing: KEYSTORE_FILE + KEYSTORE_PASSWORD + KEY_ALIAS + KEY_PASSWORD (else debug-signed)
 # Output: out/hermes-local-<version>-<abi>.apk
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ABI=${ABI:-arm64-v8a}
 ARCH=$([ "$ABI" = x86_64 ] && echo x86_64 || echo arm64)
-ENGINE_TAG=${ENGINE_TAG:-engine-v0.23.0-3}
+ENGINE_TAG=${ENGINE_TAG:-engine-v0.23.1-2}
 VERSION_NAME=${VERSION_NAME:-1.0.0}
 VERSION_CODE=${VERSION_CODE:-1}
 GRADLE=${GRADLE:-gradle}
 
 ABI=$ABI bash "$ROOT/scripts/fetch-proot.sh"
 
-assets="$ROOT/android/app/src/main/assets/engine"
-rm -rf "$assets"; mkdir -p "$assets"
-if [ "${NO_ENGINE:-0}" != 1 ]; then
-  src="${ENGINE_DIR:?set ENGINE_DIR}/rootfs-$ARCH.tar.xz"
-  [ -f "$src" ] || { echo "missing $src" >&2; exit 1; }
-  (cd "$(dirname "$src")" && sha256sum -c "rootfs-$ARCH.tar.xz.sha256")
-  ln -f "$src" "$assets/rootfs.tar.xz" 2>/dev/null || cp "$src" "$assets/rootfs.tar.xz"
-  echo "$(cut -d' ' -f1 "$src.sha256")  rootfs.tar.xz" >"$assets/rootfs.tar.xz.sha256"
+if [ -z "${ENGINE_SHA256:-}" ]; then
+  if [ -n "${ENGINE_DIR:-}" ] && [ -f "$ENGINE_DIR/rootfs-$ARCH.tar.zst.sha256" ]; then
+    ENGINE_SHA256=$(cut -d' ' -f1 "$ENGINE_DIR/rootfs-$ARCH.tar.zst.sha256")
+  else
+    ENGINE_SHA256=$(curl -fsSL "https://github.com/Ichiro786/hermes-local/releases/download/$ENGINE_TAG/rootfs-$ARCH.tar.zst.sha256" | cut -d' ' -f1)
+  fi
 fi
+[[ $ENGINE_SHA256 =~ ^[0-9a-f]{64}$ ]] || { echo "no engine sha256 for $ENGINE_TAG ($ARCH)" >&2; exit 1; }
+echo "engine $ENGINE_TAG rootfs-$ARCH.tar.zst sha256 $ENGINE_SHA256"
+rm -rf "$ROOT/android/app/src/main/assets/engine"
 
 props="$ROOT/android/keystore.properties"
 rm -f "$props"
 if [ -n "${KEYSTORE_FILE:-}" ]; then
-  cat >"$props" <<EOF
+  cat >"$props" <<PROPS
 storeFile=$KEYSTORE_FILE
 storePassword=$KEYSTORE_PASSWORD
 keyAlias=$KEY_ALIAS
 keyPassword=$KEY_PASSWORD
-EOF
+PROPS
 fi
 trap 'rm -f "$props"' EXIT
 
 cd "$ROOT/android"
-"$GRADLE" --no-daemon -PengineAbi="$ABI" -PengineTag="$ENGINE_TAG" -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
-  ${GRADLE_ARGS:-} :app:assembleRelease
+"$GRADLE" --no-daemon -PengineAbi="$ABI" -PengineTag="$ENGINE_TAG" -PengineSha256="$ENGINE_SHA256" -PversionName="$VERSION_NAME" \
+  -PversionCode="$VERSION_CODE" ${GRADLE_ARGS:-} :app:assembleRelease
 mkdir -p "$ROOT/out"
 out="$ROOT/out/hermes-local-$VERSION_NAME-$ABI.apk"
 cp app/build/outputs/apk/release/app-release.apk "$out"
 ls -l "$out"
-# The payload must be stored (not deflated) and the proot binaries present.
-unzip -v "$out" | grep -E 'lib/.*/lib(proot|proot-loader|talloc|android-shmem)\.so|assets/engine/' || true
-if [ "${NO_ENGINE:-0}" != 1 ]; then
-  unzip -v "$out" | grep -E 'assets/engine/rootfs\.tar\.xz$' | grep -q ' Stored ' || { echo "payload compressed or missing" >&2; exit 1; }
-fi
+unzip -v "$out" | grep -E 'lib/.*/lib(proot|proot-loader|talloc|android-shmem|zstd-jni[^/]*)\.so' || true
+unzip -l "$out" | grep -q 'assets/engine/' && { echo "an engine payload got bundled" >&2; exit 1; }
+unzip -l "$out" | grep -qE "lib/$ABI/libzstd-jni" || { echo "zstd-jni native library missing for $ABI" >&2; exit 1; }

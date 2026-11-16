@@ -20,7 +20,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.RocketLaunch
+import androidx.compose.material.icons.rounded.ViewInAr
+import androidx.compose.material.icons.rounded.VpnKey
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -101,17 +106,20 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
             "Hermes uses these sign-ins for its models. You can also manage providers in the dashboard.",
             Modifier.padding(horizontal = 8.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        SectionChip(Icons.Rounded.ViewInAr, "Sign-in")
         for (p in ProviderId.entries) {
             val info = statusInfo
             val signedIn = info?.signedIn(p) == true
             val f = flows[p]
             val running = f?.running == true
             Card(
-                Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(24.dp),
+                Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(28.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
             ) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (p == ProviderId.Codex) Icons.Rounded.Code else Icons.Rounded.RocketLaunch, null, Modifier.size(24.dp))
+                        Spacer(Modifier.width(14.dp))
                         Text(p.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                         if (info == null) LoadingIndicator(Modifier.size(28.dp)) else StatusDot(signedIn)
                     }
@@ -156,6 +164,7 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
                 }
             }
         }
+        SectionChip(Icons.Rounded.GraphicEq, "Voice")
         LiveVoiceCard()
         VoiceKeyCard(VoiceKeyKind.OpenAi)
         VoiceKeyCard(VoiceKeyKind.Gemini)
@@ -181,11 +190,13 @@ private fun LiveVoiceCard() {
     var error by remember { mutableStateOf<String?>(null) }
     val v = voice
     Card(
-        Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(24.dp),
+        Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.GraphicEq, null, Modifier.size(24.dp))
+                Spacer(Modifier.width(14.dp))
                 Text("Voice in the Hermes app", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 if (v == null || busy) LoadingIndicator(Modifier.size(28.dp))
             }
@@ -246,11 +257,13 @@ private fun VoiceKeyCard(kind: VoiceKeyKind) {
     val v = voice
     val saved = if (openAi) v?.openAiKey == true else v?.geminiKey == true
     Card(
-        Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(24.dp),
+        Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.VpnKey, null, Modifier.size(24.dp))
+                Spacer(Modifier.width(14.dp))
                 Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 if (v == null || busy) LoadingIndicator(Modifier.size(28.dp)) else KeyDot(saved)
             }
@@ -319,7 +332,7 @@ private fun voiceLine(v: VoiceStatus): String {
 @Composable
 private fun KeyDot(on: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline))
+        Box(Modifier.size(9.dp).clip(CircleShape).background(if (on) StatusColors.Green else MaterialTheme.colorScheme.outline))
         Spacer(Modifier.width(6.dp))
         Text(if (on) "Saved" else "Not set", style = MaterialTheme.typography.labelLarge)
     }
@@ -372,7 +385,7 @@ private fun ModelPicker(p: ProviderId, current: String?, onDismiss: () -> Unit, 
 @Composable
 private fun StatusDot(on: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline))
+        Box(Modifier.size(9.dp).clip(CircleShape).background(if (on) StatusColors.Green else MaterialTheme.colorScheme.outline))
         Spacer(Modifier.width(6.dp))
         Text(if (on) "Signed in" else "Not signed in", style = MaterialTheme.typography.labelLarge)
     }

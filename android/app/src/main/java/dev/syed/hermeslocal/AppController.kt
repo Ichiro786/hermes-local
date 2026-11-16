@@ -17,9 +17,13 @@ import dev.syed.hermeslocal.engine.EngineService
 import dev.syed.hermeslocal.engine.EngineState
 import dev.syed.hermeslocal.engine.Phase
 import dev.syed.hermeslocal.engine.Settings
+import dev.syed.hermeslocal.engine.Storage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import java.io.File
 import java.net.Inet4Address
@@ -34,6 +38,7 @@ object AppController {
     val paths get() = EnginePaths(app)
     val installer get() = EngineInstaller(app)
     val runner get() = CommandRunner(app)
+    val storage get() = Storage(app)
 
     fun init(context: Context) {
         app = context.applicationContext
@@ -50,31 +55,43 @@ object AppController {
     fun installedClient(): Pair<String, String>? =
         HERMES_CLIENTS.firstOrNull { (pkg, _) -> app.packageManager.getLaunchIntentForPackage(pkg) != null }
 
+    /**
+     * App start: drop leftovers of a killed install, then download the engine when there is none (first run)
+     * or when the installed one came with an older app (a bundled test1-test4 engine, or an older default).
+     */
     fun ensureInstalled() {
-        val s = EngineState.status.value
-        if (s.phase == Phase.Installing) return
-        if (paths.isInstalled() && !installer.bundledDiffersFromInstalled()) {
-            if (s.phase == Phase.NotInstalled) EngineState.set { it.copy(phase = Phase.Stopped) }
-            return
+        if (installing.get()) return
+        scope.launch {
+            withContext(Dispatchers.IO) { if (!installing.get()) installer.cleanLeftovers() }
+            if (paths.isInstalled() && !installer.needsUpgrade()) {
+                if (EngineState.status.value.phase == Phase.NotInstalled) EngineState.set { it.copy(phase = Phase.Stopped) }
+            } else downloadEngine()
         }
-        if (!installer.bundledAvailable()) {
-            if (!paths.isInstalled()) EngineState.set {
-                it.copy(phase = Phase.NotInstalled, message = "This build has no bundled engine. Use Settings › Update engine.")
-            }
-            return
-        }
-        install { onProgress -> installer.installBundled(onProgress) }
     }
 
-    fun reinstallBundled() = install { onProgress -> installer.installBundled(onProgress) }
+    /** First run, upgrade or retry: this app's engine release. */
+    fun downloadEngine() = install { onProgress -> installer.installFromUrl(installer.defaultUrl(), onProgress) }
 
     fun updateFromUrl(url: String) = install { onProgress -> installer.installFromUrl(url, onProgress) }
 
+    fun installFromFile(uri: Uri) = install { onProgress -> installer.installFromFile(uri, onProgress) }
+
+    /** One install at a time; set before anything else and cleared in finally, whatever happens. */
+    private val installing = java.util.concurrent.atomic.AtomicBoolean(false)
+    val isInstalling get() = installing.get()
+
     private fun install(block: suspend (onProgress: (String, Float) -> Unit) -> Unit) {
-        if (EngineState.status.value.isOn) EngineService.stop(app)
-        EngineState.set { it.copy(phase = Phase.Installing, installStage = "Preparing", installProgress = -1f, message = null) }
+        if (!installing.compareAndSet(false, true)) return
         scope.launch {
             try {
+                // Never swap the tree under a running engine: stop it and wait (bounded) until the service is done,
+                // so its late "Stopped" cannot overwrite "Installing".
+                val st = EngineState.status.value
+                if (st.isOn || st.phase == Phase.Stopping) {
+                    EngineService.stop(app)
+                    withTimeoutOrNull(20_000) { EngineState.status.first { !it.isOn && it.phase != Phase.Stopping } }
+                }
+                EngineState.set { it.copy(phase = Phase.Installing, installStage = "Preparing", installProgress = -1f, message = null) }
                 block { stage, f -> EngineState.set { it.copy(installStage = stage, installProgress = f) } }
                 // The password lives in the engine's config; a fresh engine (not an update) has none.
                 val hasPw = runner.run(listOf("/bin/bash", "/opt/hermes-local/bin/hermes-local-passwd", "--check"), timeoutSec = 90).exitCode == 0
@@ -84,20 +101,39 @@ object AppController {
                 EngineState.set {
                     it.copy(
                         phase = if (paths.isInstalled()) Phase.Failed else Phase.NotInstalled,
-                        installStage = null, message = "Engine install failed: ${e.message}",
+                        installStage = null, installProgress = -1f, message = "Engine install failed: ${e.message}",
                     )
                 }
+            } finally {
+                installing.set(false)
             }
         }
     }
 
-    fun reset() {
-        EngineService.stop(app)
-        scope.launch(Dispatchers.IO) {
-            installer.reset()
-            settings.update { copy(passwordSet = false) }
-            EngineState.set { it.copy(phase = Phase.NotInstalled, message = null) }
+    /** Deletes the engine and all Hermes data (after the engine has stopped), then offers a fresh download. */
+    fun reset(onDone: () -> Unit = {}) {
+        if (!installing.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                val st = EngineState.status.value
+                if (st.isOn || st.phase == Phase.Stopping) {
+                    EngineService.stop(app)
+                    withTimeoutOrNull(20_000) { EngineState.status.first { !it.isOn && it.phase != Phase.Stopping } }
+                }
+                withContext(Dispatchers.IO) { installer.reset() }
+                settings.update { copy(passwordSet = false) }
+                EngineState.set { it.copy(phase = Phase.NotInstalled, message = null) }
+            } finally {
+                installing.set(false)
+                onDone()
+            }
         }
+    }
+
+    /** Storage screen "Clean up": only with the engine stopped (Hermes may be using a cache or an environment). */
+    suspend fun cleanUp(): Long? {
+        if (EngineState.status.value.isOn || installing.get()) return null
+        return withContext(Dispatchers.IO) { storage.cleanUp() }
     }
 
     suspend fun setPassword(username: String, password: String): String? {
@@ -172,8 +208,5 @@ object AppController {
 
     fun apiKey(): String? = runCatching { paths.apiKey.readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
 
-    fun defaultEngineUrl(): String {
-        val abi = if (BuildConfig.ENGINE_ABI == "x86_64") "x86_64" else "arm64"
-        return "https://github.com/${BuildConfig.ENGINE_REPO}/releases/download/${BuildConfig.ENGINE_TAG}/rootfs-$abi.tar.xz"
-    }
+    fun defaultEngineUrl(): String = installer.defaultUrl()
 }

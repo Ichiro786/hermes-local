@@ -35,8 +35,9 @@ import dev.syed.hermeslocal.ui.LogsScreen
 import dev.syed.hermeslocal.ui.MainScreen
 import dev.syed.hermeslocal.ui.ProvidersScreen
 import dev.syed.hermeslocal.ui.SettingsScreen
+import dev.syed.hermeslocal.ui.StorageScreen
 
-enum class Screen { Main, Settings, Providers, Logs }
+enum class Screen { Main, Settings, Providers, Logs, Storage }
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -67,8 +68,8 @@ class MainActivity : ComponentActivity() {
         val pw = intent.getStringExtra("ci_password")
         val toggle = if (intent.hasExtra("ci_toggle")) intent.getBooleanExtra("ci_toggle", false) else null
         AppController.scope.launch {
-            // Wait for the first-run install to finish.
-            EngineState.status.first { it.phase != dev.syed.hermeslocal.engine.Phase.Installing && it.phase != dev.syed.hermeslocal.engine.Phase.NotInstalled }
+            // Wait for the first-run install (download + unpack) to finish.
+            while (AppController.isInstalling || !AppController.paths.isInstalled()) kotlinx.coroutines.delay(1000)
             if (pw != null) android.util.Log.i("HermesLocalCI", "password: ${AppController.setPassword("admin", pw) ?: "ok"}")
             if (toggle != null) AppController.toggle(toggle)
         }
@@ -92,12 +93,12 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) {
                     if (Build.VERSION.SDK_INT >= 33) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
-                BackHandler(enabled = screen != Screen.Main) { screen = if (screen == Screen.Logs) Screen.Settings else Screen.Main }
+                BackHandler(enabled = screen != Screen.Main) { screen = if (screen == Screen.Logs || screen == Screen.Storage) Screen.Settings else Screen.Main }
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
                     AnimatedContent(
                         targetState = screen,
                         transitionSpec = {
-                            val forward = targetState != Screen.Main
+                            val forward = targetState.ordinal > initialState.ordinal
                             val slide = spring<IntOffset>(dampingRatio = 0.9f, stiffness = 500f)
                             (slideInHorizontally(slide) { w -> if (forward) w / 4 else -w / 4 } + fadeIn()) togetherWith
                                 (slideOutHorizontally(slide) { w -> if (forward) -w / 4 else w / 4 } + fadeOut())
@@ -109,6 +110,7 @@ class MainActivity : ComponentActivity() {
                             Screen.Settings -> SettingsScreen(status, settings, onBack = { screen = Screen.Main }, onNavigate = { screen = it })
                             Screen.Providers -> ProvidersScreen(status, onBack = { screen = Screen.Main })
                             Screen.Logs -> LogsScreen(onBack = { screen = Screen.Settings })
+                            Screen.Storage -> StorageScreen(status, onBack = { screen = Screen.Settings })
                         }
                     }
                 }

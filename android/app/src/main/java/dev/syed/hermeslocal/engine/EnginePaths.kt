@@ -11,6 +11,9 @@ class EnginePaths(context: Context) {
     val staging = File(app.filesDir, "r.partial")
     val root = File(app.filesDir, "engine")
     val downloads = File(root, "downloads")
+    /** The engine download in progress (resumable); its url + sha256 in [pendingJson]. */
+    val downloadPart = File(downloads, "rootfs.part")
+    val pendingJson = File(downloads, "pending.json")
     val logs = File(root, "logs")
     val installedJson = File(root, "installed.json")
     val prootTmp = File(app.cacheDir, "proot")

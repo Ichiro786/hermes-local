@@ -12,7 +12,8 @@ data class SettingsSnapshot(
     val apiServer: Boolean = false,
     val apiPort: Int = 8642,
     val startOnBoot: Boolean = false,
-    val keepAwake: Boolean = true,
+    /** Hold the wake lock the whole time Hermes runs (else only for a turn, a due cron job or LAN access). */
+    val keepAwake: Boolean = false,
     val autoRestart: Boolean = true,
     val amoled: Boolean = true,
     val dynamicColor: Boolean = true,
@@ -39,7 +40,7 @@ class Settings private constructor(context: Context) {
         apiServer = prefs.getBoolean("api_server", false),
         apiPort = prefs.getInt("api_port", 8642),
         startOnBoot = prefs.getBoolean("boot", false),
-        keepAwake = prefs.getBoolean("keep_awake", true),
+        keepAwake = prefs.getBoolean("keep_awake_always", false), // test5: new key, the old default-on "keep_awake" is dropped
         autoRestart = prefs.getBoolean("auto_restart", true),
         amoled = prefs.getBoolean("amoled", true),
         dynamicColor = prefs.getBoolean("dynamic_color", true),
@@ -56,7 +57,7 @@ class Settings private constructor(context: Context) {
             .putBoolean("api_server", s.apiServer)
             .putInt("api_port", s.apiPort.coerceIn(1024, 65535))
             .putBoolean("boot", s.startOnBoot)
-            .putBoolean("keep_awake", s.keepAwake)
+            .putBoolean("keep_awake_always", s.keepAwake)
             .putBoolean("auto_restart", s.autoRestart)
             .putBoolean("amoled", s.amoled)
             .putBoolean("dynamic_color", s.dynamicColor)

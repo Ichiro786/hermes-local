@@ -33,7 +33,7 @@ object ProotCommand {
         "HERMES_HOME" to "/root/.hermes",
         "HERMES_RUNTIME_DIR" to "/opt/hermes/tools",
         // The engine is replaced as a whole; agy never updates itself (Hermes: install stamp, see build-rootfs.sh).
-        "AGY_CLI_DISABLE_AUTO_UPDATE" to "1",
+        "AGY_CLI_DISABLE_AUTO_UPDATE" to "true", // agy ignores "1" (antigravity-cli#1046)
     ).apply { putAll(extra) }
 
     fun argv(paths: EnginePaths, guestArgv: List<String>, env: Map<String, String>): List<String> {
@@ -87,7 +87,10 @@ object ProotCommand {
         // link2symlink keeps its backing files in one directory, so renaming a directory that holds
         // emulated hard links (uv moves unpacked wheels into its cache) does not break them.
         // Without it plugin/extra installs fail with "failed to hardlink file ... .l2s.*".
-        env["PROOT_L2S_DIR"] = File(paths.rootfs, ".l2s").apply { mkdirs() }.absolutePath
+        // Canonical path: proot resolves -r canonically (filesDir /data/user/0/<pkg> is a symlink to
+        // /data/data/<pkg>), so an l2s store given under the other spelling makes every emulated hard link
+        // point outside the guest root (stat/connect ENOENT; Empryo Local test3).
+        env["PROOT_L2S_DIR"] = File(paths.rootfs, ".l2s").apply { mkdirs() }.canonicalPath
         env["LD_LIBRARY_PATH"] = paths.nativeLibDir.absolutePath
         return pb
     }
