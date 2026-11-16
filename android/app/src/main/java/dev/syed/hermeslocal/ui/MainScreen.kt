@@ -36,6 +36,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Monitor
@@ -226,7 +227,7 @@ private fun DashboardCard(status: EngineStatus, onOpenHermes: () -> Unit, onOpen
             }
             val chips = buildList {
                 if (status.thermal >= 1) add(Triple(Icons.Rounded.Thermostat, thermalLabel(status.thermal), if (status.thermal >= 2) StatusColors.Amber else null))
-                if (running) add(Triple(Icons.Rounded.Bedtime, status.awake ?: "CPU may sleep", null))
+                if (running) add(Triple(if (status.awake != null) Icons.Rounded.Bolt else Icons.Rounded.Bedtime, status.awake ?: "CPU may sleep", null))
             }
             if (chips.isNotEmpty()) FlowRow(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 chips.forEach { (icon, text, tint) -> Chip(icon, text, tint) }
@@ -319,7 +320,8 @@ private fun InstallCard(status: EngineStatus) {
                     LoadingIndicator(Modifier.size(44.dp))
                     Spacer(Modifier.width(12.dp))
                     Column {
-                        Text(status.installStage ?: "Setting up", style = MaterialTheme.typography.titleMedium)
+                        val pct = status.installProgress.takeIf { it >= 0f }?.let { " · ${(it * 100).toInt()} %" } ?: ""
+                        Text((status.installStage ?: "Setting up") + pct, style = MaterialTheme.typography.titleMedium)
                         Text("One-time: Hermes Agent with Codex and Antigravity sign-in (about 500 MB download, resumes if interrupted)",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }

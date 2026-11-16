@@ -32,7 +32,11 @@ class ScreensScreenshotTest {
     private val out = System.getProperty("shots.dir") ?: "build/shots"
     private val ready = SettingsSnapshot(passwordSet = true, amoled = false, dynamicColor = false)
 
-    @Before fun setUp() { AppController.init(RuntimeEnvironment.getApplication()) }
+    @Before fun setUp() {
+        val app = RuntimeEnvironment.getApplication()
+        app.applicationInfo.nativeLibraryDir = app.cacheDir.path // Robolectric leaves it null; EnginePaths needs a path
+        AppController.init(app)
+    }
 
     private fun shot(name: String, amoled: Boolean = false, ms: Long = 1500, content: @Composable () -> Unit) {
         compose.mainClock.autoAdvance = false
