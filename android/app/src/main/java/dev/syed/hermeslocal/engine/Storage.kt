@@ -46,7 +46,7 @@ class Storage(context: Context) {
         val engine = rootfs - installs - sessions - caches - agy - NativeFs.du(File(home, "logs"))
         val parts = listOf(
             Part("Hermes engine", engine, "Ubuntu userland, Hermes Agent, tools"),
-            Part("Python dependencies", installs, "${stale.size + (if (installs > 0) 1 else 0)} generation(s), ${stale.size} unused"),
+            Part("Python dependencies", installs, if (installs == 0L) "" else if (stale.isEmpty()) "one generation, in use" else "${stale.size} unused generation(s) left by installs"),
             Part("Sessions and memory", sessions),
             Part("Antigravity CLI", agy, if (agyOld.isEmpty()) "" else "${agyOld.size} old copy left by a self-update"),
             Part("Caches", caches, "downloads Hermes keeps after installs"),

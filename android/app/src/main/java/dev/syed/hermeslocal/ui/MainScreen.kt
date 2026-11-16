@@ -146,7 +146,8 @@ fun MainScreen(status: EngineStatus, settings: SettingsSnapshot, onNavigate: (Sc
             }
         }
         val hint = when {
-            !installed -> "Setting up the engine…"
+            status.phase == Phase.Installing -> "Setting up the engine…"
+            !installed -> "The engine is needed to start"
             !settings.passwordSet -> "Set a dashboard password to unlock the lever"
             status.phase == Phase.Running -> "Slide down to stop"
             status.phase == Phase.Starting -> "Starting…"
@@ -249,7 +250,7 @@ private fun DashboardCard(status: EngineStatus, onOpenHermes: () -> Unit, onOpen
                     Text("LAN: http://$it:${status.port}", Modifier.padding(top = 8.dp, start = 4.dp), style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                 }
             }
-            status.message?.let {
+            status.message?.takeIf { status.phase != Phase.NotInstalled && status.phase != Phase.Installing }?.let {
                 Text(it, Modifier.padding(top = 10.dp, start = 4.dp), style = MaterialTheme.typography.bodyMedium,
                     color = if (status.phase == Phase.Failed) StatusColors.Red else MaterialTheme.colorScheme.onSurfaceVariant)
             }

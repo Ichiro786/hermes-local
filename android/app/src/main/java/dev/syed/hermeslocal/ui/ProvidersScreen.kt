@@ -102,11 +102,11 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
     }
 
     ScreenFrame("Providers", onBack) {
+        SectionChip(Icons.Rounded.ViewInAr, "Sign-in")
         Text(
             "Hermes uses these sign-ins for its models. You can also manage providers in the dashboard.",
             Modifier.padding(horizontal = 8.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        SectionChip(Icons.Rounded.ViewInAr, "Sign-in")
         for (p in ProviderId.entries) {
             val info = statusInfo
             val signedIn = info?.signedIn(p) == true

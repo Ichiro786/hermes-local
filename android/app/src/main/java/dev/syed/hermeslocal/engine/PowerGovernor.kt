@@ -119,6 +119,8 @@ class PowerGovernor(
             @Suppress("DEPRECATION")
             wifiLock = context.applicationContext.getSystemService(WifiManager::class.java)
                 .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "HermesLocal:lan").apply { setReferenceCounted(false); acquire() }
+        } else if (!settings.lanAccess) {
+            wifiLock?.let { if (it.isHeld) it.release() }; wifiLock = null
         }
         if (EngineState.status.value.awake != reason) EngineState.set { it.copy(awake = reason) }
     }
