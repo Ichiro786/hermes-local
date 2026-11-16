@@ -2,6 +2,7 @@ name: Optimize probe (research)
 
 # Research only: measures the engine payload's size, unpack speed, boot time and idle cost on a native arm64
 # runner the way the app runs it (engine/optim/probe.sh). Runs on pushes to research/optimize only; publishes nothing.
+# Run 2: one step + one artifact per phase (run 1's runner died and took every result with it).
 
 on:
   push:
@@ -14,10 +15,17 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 170
+    timeout-minutes: 200
     env:
       GH_TOKEN: ${{ github.token }}
+      WORK: /var/hl
     steps:
+      - name: Free disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /opt/microsoft /opt/google || true
+          sudo docker system prune -af >/dev/null 2>&1 || true
+          df -h /
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
@@ -29,15 +37,99 @@ jobs:
         run: |
           git clone -q --depth 1 https://github.com/termux/proot "$RUNNER_TEMP/proot-src"
           make -s -C "$RUNNER_TEMP/proot-src/src" -j"$(nproc)" HAS_LOADER_32BIT= proot
-          "$RUNNER_TEMP/proot-src/src/proot" --version | head -n 3 || true
-      - name: Probe
+          echo "PROOT=$RUNNER_TEMP/proot-src/src/proot" >> "$GITHUB_ENV"
+      - name: Phase setup
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 15
         run: |
           mkdir -p out
-          sudo -E env "PATH=$PATH" OUT="$PWD/out" PROOT="$RUNNER_TEMP/proot-src/src/proot" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
-            bash engine/optim/probe.sh 2>&1 | tee out/probe.log
+          sudo -E env "PATH=$PATH" OUT_ROOT="$PWD/out" PROOT="$PROOT" WORK="$WORK" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            bash engine/optim/probe.sh setup 2>&1 | tee "out/log-setup.txt"
           sudo chown -R "$(id -u)" out
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
-          name: optimize-probe
-          path: out/
+          name: probe-setup
+          path: out/setup/
+      - name: Phase compress
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 30
+        run: |
+          mkdir -p out
+          sudo -E env "PATH=$PATH" OUT_ROOT="$PWD/out" PROOT="$PROOT" WORK="$WORK" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            bash engine/optim/probe.sh compress 2>&1 | tee "out/log-compress.txt"
+          sudo chown -R "$(id -u)" out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: probe-compress
+          path: out/compress/
+      - name: Phase boots
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 50
+        run: |
+          mkdir -p out
+          sudo -E env "PATH=$PATH" OUT_ROOT="$PWD/out" PROOT="$PROOT" WORK="$WORK" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            bash engine/optim/probe.sh boots 2>&1 | tee "out/log-boots.txt"
+          sudo chown -R "$(id -u)" out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: probe-boots
+          path: out/boots/
+      - name: Phase use
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 35
+        run: |
+          mkdir -p out
+          sudo -E env "PATH=$PATH" OUT_ROOT="$PWD/out" PROOT="$PROOT" WORK="$WORK" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            bash engine/optim/probe.sh use 2>&1 | tee "out/log-use.txt"
+          sudo chown -R "$(id -u)" out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: probe-use
+          path: out/use/
+      - name: Phase precompile
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 25
+        run: |
+          mkdir -p out
+          sudo -E env "PATH=$PATH" OUT_ROOT="$PWD/out" PROOT="$PROOT" WORK="$WORK" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            bash engine/optim/probe.sh precompile 2>&1 | tee "out/log-precompile.txt"
+          sudo chown -R "$(id -u)" out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: probe-precompile
+          path: out/precompile/
+      - name: Phase update
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 35
+        run: |
+          mkdir -p out
+          sudo -E env "PATH=$PATH" OUT_ROOT="$PWD/out" PROOT="$PROOT" WORK="$WORK" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            bash engine/optim/probe.sh update 2>&1 | tee "out/log-update.txt"
+          sudo chown -R "$(id -u)" out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: probe-update
+          path: out/update/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-logs
+          path: out/log-*.txt
