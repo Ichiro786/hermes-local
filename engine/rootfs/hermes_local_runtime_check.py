@@ -41,7 +41,7 @@ def browser():
         first = """print(js("document.title = 'HL_BROWSER_OK'"))"""
         second = """print(js("document.title"))"""
         for code in (first, second):
-            tool_output(browser_exec(code, task_id=task, local=True, timeout_s=40),
+            tool_output(browser_exec(code, task_id=task, timeout_s=40),
                         "HL_BROWSER_OK", lambda result: result.get("success"))
     finally:
         cleanup_browser(task)
