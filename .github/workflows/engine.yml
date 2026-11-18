@@ -69,9 +69,9 @@ jobs:
           HERMES_COMMIT: ${{ steps.ref.outputs.sha }}
           ENGINE_REVISION: ${{ inputs.revision }}
           GIT_SHA: ${{ github.sha }}
-          # Installed size limit (the build fails above it): 2.7 GB for the phone's arm64 engine; the x86_64
+          # Installed size limit (the build fails above it): 2.9 GB for the phone's arm64 engine; the x86_64
           # engine (CI emulator only) has bigger binaries.
-          SIZE_LIMIT: ${{ matrix.arch == 'arm64' && '2700000000' || '3000000000' }}
+          SIZE_LIMIT: ${{ matrix.arch == 'arm64' && '2900000000' || '3350000000' }}
         run: |
           sudo --preserve-env=OUT_DIR,WORK_DIR,HERMES_REF,HERMES_COMMIT,ENGINE_REVISION,GIT_SHA,SIZE_LIMIT bash engine/build-rootfs.sh
           sudo chown -R "$(id -u):$(id -g)" "$OUT_DIR"

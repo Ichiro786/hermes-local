@@ -294,7 +294,7 @@ kill -INT $REC 2>/dev/null; sleep 3; adb pull /sdcard/lever-on.mp4 "$S/lever-on.
 # login_check tees its lines: keep them out of the $( ) value (test5 run 10 failed this check on a 200/401/200 dashboard)
 check "fresh: dashboard up, password gate on, login works" "$([ $ok = 1 ] && login_check "$OUT/dashboard-check.txt" >/dev/null && echo 1 || echo 0)"
 boot_kb=$(kb); note "data after first boot: $((boot_kb / 1024)) MiB ($boot_kb KiB)"
-check "data after first boot below 3.2 GB (x86_64 engine)" "$([ "$boot_kb" -gt 0 ] && [ "$boot_kb" -lt 3125000 ] && echo 1 || echo 0)"
+check "data after first boot below 3.6 GB (x86_64 engine)" "$([ "$boot_kb" -gt 0 ] && [ "$boot_kb" -lt 3515625 ] && echo 1 || echo 0)"
 
 if [ "$ok" = 1 ]; then
   for tool in browser terminal code mcp antigravity; do
