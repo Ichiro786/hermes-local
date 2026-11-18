@@ -23,6 +23,11 @@ CODEX = "openai-codex"
 AGY = "antigravity-oauth"
 TOKEN_FILES = ("jetski-standalone-oauth-token", "antigravity-oauth-token")
 
+# Gemini 4 models served by Antigravity but missing from the Hermes Agent
+# catalog (live fetchers and curated list, up to v0.23.2). Order: the
+# general-purpose flagship first, then the Ultra-only ones.
+_GEMINI4_ANTIGRAVITY = ("gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon")
+
 
 def _config():
     from hermes_cli.config import load_config
@@ -102,7 +107,13 @@ def status():
 
 
 def _model_ids(provider):
-    """The picker's list for a signed-in provider (live catalog), else Hermes' curated list."""
+    """The picker's list for a signed-in provider (live catalog), else Hermes' curated list.
+
+    Antigravity: neither the live catalog nor the Hermes Agent's curated list
+    (up to v0.23.2) includes the Gemini 4 models yet, so append them here.
+    The Antigravity backend rejects the pick if the account is not entitled
+    (e.g. Carbon needs Ultra), so listing them is safe.
+    """
     ids = []
     try:
         from hermes_cli.inventory import build_models_payload, load_picker_context
@@ -115,6 +126,8 @@ def _model_ids(provider):
     if not ids:
         from hermes_cli.models import provider_model_ids
         ids = [str(m) for m in provider_model_ids(provider)]
+    if str(provider).lower() == "antigravity":
+        ids = [*ids, *(m for m in _GEMINI4_ANTIGRAVITY if m not in ids)]
     return ids
 
 
