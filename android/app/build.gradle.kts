@@ -29,7 +29,7 @@ android {
         // CI emulator builds only: intent extras drive setup (ci_password, ci_toggle) without UI automation.
         buildConfigField("boolean", "CI_HOOKS", "${(project.findProperty("ciHooks") as String?) == "true"}")
         buildConfigField("String", "ENGINE_REPO", "\"Ichiro786/hermes-local\"")
-        buildConfigField("String", "ENGINE_TAG", "\"${(project.findProperty("engineTag") as String?) ?: "engine-v0.23.1-2"}\"")
+        buildConfigField("String", "ENGINE_TAG", "\"${(project.findProperty("engineTag") as String?) ?: "engine-v0.23.2-2"}\"")
         // sha256 of that release's rootfs-<arch>.tar.zst (build-apk.sh reads it from the release): the first-run
         // download and "Install from file" are verified against it. Empty = trust the .sha256 next to the URL.
         buildConfigField("String", "ENGINE_SHA256", "\"${(project.findProperty("engineSha256") as String?) ?: ""}\"")

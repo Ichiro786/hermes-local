@@ -14,9 +14,9 @@
 #                              allow-list of it over on update). Its installs/ (the one dependency generation)
 #                              and cache/ belong to the engine and are never carried over.
 #
-# Env: OUT_DIR, WORK_DIR, HERMES_REF (tag, default v0.23.0), HERMES_COMMIT (sha of that tag),
+# Env: OUT_DIR, WORK_DIR, HERMES_REF (tag, default v0.23.2), HERMES_COMMIT (sha of that tag),
 #      ENGINE_REVISION, GIT_SHA, ZSTD_LEVEL (default 19, --long=27), WITH_AGY (default 1),
-#      SIZE_LIMIT (bytes installed on the phone, default 2200000000: the build fails above it)
+#      SIZE_LIMIT (bytes installed on the phone, default 2700000000: the build fails above it)
 set -euo pipefail
 export LC_ALL=C DEBIAN_FRONTEND=noninteractive
 
@@ -24,10 +24,10 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 OUT_DIR=$(realpath -m "${OUT_DIR:-./out}")
 WORK_DIR=$(realpath -m "${WORK_DIR:-./build}")
 ROOTFS="$WORK_DIR/rootfs"
-HERMES_REF="${HERMES_REF:-v0.23.0}"
+HERMES_REF="${HERMES_REF:-v0.23.2}"
 HERMES_COMMIT="${HERMES_COMMIT:-}"
 ZSTD_LEVEL="${ZSTD_LEVEL:-19}"
-SIZE_LIMIT="${SIZE_LIMIT:-2200000000}"
+SIZE_LIMIT="${SIZE_LIMIT:-2700000000}"
 WITH_AGY="${WITH_AGY:-1}"
 UBUNTU_BASE_DIR="${UBUNTU_BASE_DIR:-https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release}"
 
@@ -93,10 +93,13 @@ bind_mount /proc "$ROOTFS/proc"
 bind_mount /sys "$ROOTFS/sys"
 bind_mount /dev "$ROOTFS/dev"
 bind_mount /dev/pts "$ROOTFS/dev/pts"
-# What Hermes' Dockerfile installs, minus docker/browser libs (no Chromium on the phone in v1).
+# System dependencies for the PM-managed Chromium, matching the Hermes Docker image on Noble.
 pkgs="ca-certificates curl wget git openssh-client procps psmisc less xz-utils unzip zip tmux ripgrep jq
 python3 python3-venv python3-dev gcc g++ make libffi-dev libatomic1 libstdc++6 tini sqlite3
-iproute2 iputils-ping file bash coreutils util-linux tzdata locales fonts-dejavu-core"
+iproute2 iputils-ping file bash coreutils util-linux tzdata locales fonts-dejavu-core
+libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64
+libdbus-1-3 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1
+libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2"
 in_root "apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends $(echo $pkgs)"
 endstep
 
@@ -107,7 +110,7 @@ fetch -o "$ROOTFS/tmp/hermes-install.sh" "https://raw.githubusercontent.com/Nous
 commit_arg=""
 [ -n "$HERMES_COMMIT" ] && commit_arg="--commit $HERMES_COMMIT"
 in_root "bash /tmp/hermes-install.sh $commit_arg --channel stable --dir /opt/hermes/hermes-agent --hermes-home /root/.hermes \
-  --non-interactive --skip-browser --skip-computer-use --verbose </dev/null"
+  --non-interactive --skip-computer-use --verbose </dev/null"
 # One stable entry point regardless of where command publication put the launcher.
 hermes_bin=""
 for c in /root/.local/bin/hermes /opt/hermes/hermes-agent/venv/bin/hermes /opt/hermes/hermes-agent/.venv/bin/hermes /usr/local/bin/hermes; do
@@ -127,11 +130,29 @@ echo "HERMES_HOME contents:"; ls -la "$ROOTFS/root/.hermes" || true
 du -sh "$ROOTFS/opt/hermes"/* "$ROOTFS/root/.hermes" 2>/dev/null || true
 endstep
 
-step "antigravity-oauth plugin"
-in_root "hermes plugins install antigravity-oauth --enable --yes-deps </dev/null" ||
-  echo "::warning::antigravity-oauth plugin install failed"
-in_root "hermes plugins list 2>&1 | tail -n 20" || true
-endstep
+if [ "$WITH_AGY" = 1 ]; then
+  step "Google agy CLI"
+  # agy updates itself on first use (+489 MiB on the probe: new binary + agy.<n>.old). It honours only
+  # AGY_CLI_DISABLE_AUTO_UPDATE=true (not =1, antigravity-cli#1046) and "update.mode": "none" in its settings.
+  install -d -m 0700 "$ROOTFS/root/.gemini/antigravity-cli"
+  printf '{\n  "update.mode": "none"\n}\n' >"$ROOTFS/root/.gemini/antigravity-cli/settings.json"
+  fetch -o "$ROOTFS/tmp/agy-install.sh" https://antigravity.google/cli/install.sh
+  in_root "bash /tmp/agy-install.sh --dir /usr/local/bin </dev/null"
+  # agy's installer also copies itself to ~/.local/bin (240 MB each): keep one binary.
+  if [ -f "$ROOTFS/root/.local/bin/agy" ] && [ ! -L "$ROOTFS/root/.local/bin/agy" ] && [ -f "$ROOTFS/usr/local/bin/agy" ]; then
+    if cmp -s "$ROOTFS/root/.local/bin/agy" "$ROOTFS/usr/local/bin/agy"; then ln -sfn /usr/local/bin/agy "$ROOTFS/root/.local/bin/agy"; fi
+  fi
+  in_root "timeout 30 agy --version"
+  cat "$ROOTFS/root/.gemini/antigravity-cli/settings.json"
+  grep -q '"update.mode": *"none"' "$ROOTFS/root/.gemini/antigravity-cli/settings.json" || fail "agy settings lost update.mode none"
+  endstep
+
+  step "antigravity-oauth plugin"
+  # This upstream revision preserves the exact model IDs returned by agy models.
+  in_root "hermes plugins install antigravity-oauth --ref d9cec185c249d22578237821f9df8f7a3618d0e8 --enable --yes-deps </dev/null"
+  in_root "/opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap; from providers import get_provider_profile; assert get_provider_profile(\"antigravity-oauth\") is not None'"
+  endstep
+fi
 
 step "Voice: Edge TTS, cloud speech-to-text, live voice bridge (no local Whisper)"
 # v1.0.0-test3 shipped faster-whisper + Whisper small (~1 GB installed) for /api/audio/transcribe. Syed never
@@ -278,24 +299,6 @@ echo "voice size (installed): edge-tts +$(( (size_edge - size_before) / 1048576 
 du -sh "$ROOTFS/opt/hermes-local/live-libs" || true
 endstep
 
-if [ "$WITH_AGY" = 1 ]; then
-  step "Google agy CLI"
-  # agy updates itself on first use (+489 MiB on the probe: new binary + agy.<n>.old). It honours only
-  # AGY_CLI_DISABLE_AUTO_UPDATE=true (not =1, antigravity-cli#1046) and "update.mode": "none" in its settings.
-  install -d -m 0700 "$ROOTFS/root/.gemini/antigravity-cli"
-  printf '{\n  "update.mode": "none"\n}\n' >"$ROOTFS/root/.gemini/antigravity-cli/settings.json"
-  fetch -o "$ROOTFS/tmp/agy-install.sh" https://antigravity.google/cli/install.sh
-  in_root "bash /tmp/agy-install.sh --dir /usr/local/bin </dev/null" || echo "::warning::agy install failed"
-  # agy's installer also copies itself to ~/.local/bin (240 MB each): keep one binary.
-  if [ -f "$ROOTFS/root/.local/bin/agy" ] && [ ! -L "$ROOTFS/root/.local/bin/agy" ] && [ -f "$ROOTFS/usr/local/bin/agy" ]; then
-    if cmp -s "$ROOTFS/root/.local/bin/agy" "$ROOTFS/usr/local/bin/agy"; then ln -sfn /usr/local/bin/agy "$ROOTFS/root/.local/bin/agy"; fi
-  fi
-  in_root "ls -l /usr/local/bin/agy /root/.local/bin/agy 2>&1; (AGY_CLI_DISABLE_AUTO_UPDATE=true timeout 30 agy --version || true)" || echo "::warning::agy not runnable"
-  cat "$ROOTFS/root/.gemini/antigravity-cli/settings.json"
-  grep -q '"update.mode": *"none"' "$ROOTFS/root/.gemini/antigravity-cli/settings.json" || fail "agy settings lost update.mode none"
-  endstep
-fi
-
 step "No self-update on the phone"
 # The engine is replaced as a whole by the app (engine-<ref>-<rev> releases). Hermes must never
 # update itself or finish a "source update" at launch inside proot: on v1.0.0-test1 every launch
@@ -402,6 +405,8 @@ find "$ROOTFS/root/.hermes/installs" "$ROOTFS/opt" -path '*googleapiclient/disco
 rm -f "$ROOTFS"/usr/local/bin/agy.*.old "$ROOTFS"/root/.local/bin/agy.*.old
 bind_mount /proc "$ROOTFS/proc"; bind_mount /dev "$ROOTFS/dev"
 in_root "hermes --version | head -n 2"
+# Check the packaged binary after trimming, so a cleanup change cannot ship a broken browser.
+in_root '/opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_runtime_check.py chromium'
 in_root "/bin/bash /opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap, edge_tts, googleapiclient.discovery, fastapi; print(\"imports ok\")'"
 # Valid timestamp .pycs for the Hermes tree and live-libs: the app now restores mtimes, so they stay valid on the
 # phone (v1.0.0-test4's first boot recompiled ~2,000 modules because every mtime was "now").

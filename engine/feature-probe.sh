@@ -116,7 +116,13 @@ else feat cron fail "create $c $(body 200)"; fi
 # Tools: terminal backends (local works; docker/modal/ssh need the outside), browser
 api GET /api/tools/terminal/backends >/dev/null; feat terminal-backends info "$(jq -c '[.backends[]? // .[]? | {name, status}]' "$work/f.json" 2>/dev/null | cut -c1-300)"
 api GET /api/tools/toolsets >/dev/null; feat toolsets info "$(jq -c '[.[]? | select(.name=="browser" or .name=="terminal" or .name=="code_execution" or .name=="vision" or .name=="image_gen") | {name, enabled, available: (.available // .configured // null)}]' "$work/f.json" 2>/dev/null | cut -c1-300)"
-feat chromium info "$(run /bin/bash -lc 'command -v chromium chromium-browser google-chrome 2>/dev/null; ls /root/.cache/ms-playwright 2>/dev/null' | head -n2 | tr '\n' ' ' || true)none found"
+for tool in browser terminal code mcp antigravity; do
+  if grep -qx "HL_RUNTIME_OK $tool" "$work/runtime-$tool.log"; then
+    feat "$tool" works "local runtime smoke passed"
+  else
+    feat "$tool" fail "$(tail -n 3 "$work/runtime-$tool.log" | tr '\n' ' ' | cut -c1-300)"
+  fi
+done
 
 # Memory
 api GET /api/memory >/dev/null; feat memory info "$(jq -c '{active, providers: [.providers[]?.name]}' "$work/f.json" 2>/dev/null | cut -c1-250)"

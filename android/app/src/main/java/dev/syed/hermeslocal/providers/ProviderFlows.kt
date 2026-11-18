@@ -228,7 +228,8 @@ object ProviderFlows {
         return try {
             val o = JSONObject(json)
             val arr = o.optJSONArray("models")
-            Models((0 until (arr?.length() ?: 0)).map { arr!!.optString(it) }, o.optString("recommended"))
+            if (arr == null) Models(emptyList(), "", o.optString("error", "Could not load models."))
+            else Models((0 until arr.length()).map { arr.optString(it) }, o.optString("recommended"))
         } catch (e: Exception) {
             Models(emptyList(), "", e.message)
         }

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       engine_tag:
-        default: "engine-v0.23.0-2"
+        default: "engine-v0.23.2-2"
       arch:
         default: "arm64"
       artifact_run:
@@ -29,17 +29,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Host tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils jq libtalloc-dev gawk
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils zstd jq libtalloc-dev gawk
       - name: Engine payload
+        env:
+          ARTIFACT_RUN: ${{ inputs.artifact_run }}
+          ENGINE_TAG: ${{ inputs.engine_tag }}
+          ARCH: ${{ inputs.arch }}
         run: |
-          if [ -n "${{ inputs.artifact_run }}" ]; then
-            gh run download "${{ inputs.artifact_run }}" --repo "$GITHUB_REPOSITORY" -n "engine-${{ inputs.arch }}" -D dl
+          if [ -n "$ARTIFACT_RUN" ]; then
+            gh run download "$ARTIFACT_RUN" --repo "$GITHUB_REPOSITORY" -n "engine-$ARCH" -D dl
           else
-            gh release download "${{ inputs.engine_tag }}" --repo "$GITHUB_REPOSITORY" -D dl -p "rootfs-${{ inputs.arch }}.tar.xz*"
+            if ! gh release download "$ENGINE_TAG" --repo "$GITHUB_REPOSITORY" -D dl -p "rootfs-$ARCH.tar.zst*"; then
+              gh release download "$ENGINE_TAG" --repo "$GITHUB_REPOSITORY" -D dl -p "rootfs-$ARCH.tar.xz*"
+            fi
           fi
           ls -l dl
-          (cd dl && sha256sum -c "rootfs-${{ inputs.arch }}.tar.xz.sha256")
-          sudo mkdir -p "$RUNNER_TEMP/rootfs" && sudo tar -C "$RUNNER_TEMP/rootfs" --numeric-owner -xJf "dl/rootfs-${{ inputs.arch }}.tar.xz"
+          asset="rootfs-$ARCH.tar.zst"
+          [ -f "dl/$asset" ] || asset="rootfs-$ARCH.tar.xz"
+          (cd dl && sha256sum -c "$asset.sha256")
+          sudo mkdir -p "$RUNNER_TEMP/rootfs"
+          sudo tar -C "$RUNNER_TEMP/rootfs" --numeric-owner -xf "dl/$asset"
       - name: Build proot (termux/proot)
         run: |
           git clone -q --depth 1 https://github.com/termux/proot "$RUNNER_TEMP/proot-src"
