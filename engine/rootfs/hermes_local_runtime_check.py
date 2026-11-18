@@ -65,6 +65,7 @@ async def mcp_roundtrip():
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
     from pm import installed_package
+    from tools.mcp_tool_common import mcp_field
 
     node = installed_package("node")
     if node is None or node.binary is None:
@@ -90,7 +91,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
             if [tool.name for tool in tools.tools] != ["probe"]:
                 raise RuntimeError(tools)
             reply = await session.call_tool("probe", {})
-            if reply.isError or reply.content[0].text != "HL_MCP_OK":
+            if mcp_field(reply, "is_error", "isError", False) or reply.content[0].text != "HL_MCP_OK":
                 raise RuntimeError(reply)
 
 
