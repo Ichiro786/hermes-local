@@ -94,13 +94,20 @@ bind_mount /sys "$ROOTFS/sys"
 bind_mount /dev "$ROOTFS/dev"
 bind_mount /dev/pts "$ROOTFS/dev/pts"
 # System dependencies for the PM-managed Chromium, matching the Hermes Docker image on Noble.
-pkgs="ca-certificates curl wget git openssh-client procps psmisc less xz-utils unzip zip tmux ripgrep jq
+# openssh-server is for the official Hermes app's Terminal, which connects by SSH as user "admin".
+pkgs="ca-certificates curl wget git openssh-client openssh-server procps psmisc less xz-utils unzip zip tmux ripgrep jq
 python3 python3-venv python3-dev gcc g++ make libffi-dev libatomic1 libstdc++6 tini sqlite3
 iproute2 iputils-ping file bash coreutils util-linux tzdata locales fonts-dejavu-core
 libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64
 libdbus-1-3 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1
 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2"
 in_root "apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends $(echo $pkgs)"
+# The official Hermes app's Terminal connects by SSH as user "admin". Create the user at build
+# time; hermes-local-passwd keeps its system password in sync with the dashboard password, and
+# hermes-local-start runs sshd for it. Host keys are per-device, so do not ship the build's:
+# hermes-local-start generates them with ssh-keygen -A on first start.
+in_root "id admin 2>/dev/null || useradd -m -s /bin/bash admin"
+rm -f "$ROOTFS"/etc/ssh/ssh_host_*
 endstep
 
 step "Hermes Agent $HERMES_REF"
@@ -420,7 +427,11 @@ step "Shrink"
 in_root "apt-get clean"
 cleanup_mounts
 rm -f "$ROOTFS/usr/sbin/policy-rc.d"
-rm -rf "$ROOTFS"/var/lib/apt/lists/* "$ROOTFS"/var/cache/apt/* "$ROOTFS"/var/log/* "$ROOTFS"/tmp/* "$ROOTFS"/var/tmp/* \
+# Keep /var/lib/apt/lists: the Bot Screen install runs plain "apt-get install" with no update
+# first, so with wiped lists apt cannot locate any package (not even xauth) and the install
+# fails. The lists cost some size but make the install work out of the box; apt-get update
+# refreshes them whenever the user runs it.
+rm -rf "$ROOTFS"/var/cache/apt/* "$ROOTFS"/var/log/* "$ROOTFS"/tmp/* "$ROOTFS"/var/tmp/* \
   "$ROOTFS"/root/.cache "$ROOTFS"/root/.npm "$ROOTFS"/root/.bash_history "$ROOTFS"/usr/share/{man,info,groff,lintian}
 find "$ROOTFS/usr/share/locale" -mindepth 1 -maxdepth 1 ! -name locale.alias -exec rm -rf {} + 2>/dev/null || true
 rm -rf "$ROOTFS/root/.hermes/logs"/* "$ROOTFS/root/.hermes/sessions"/* 2>/dev/null || true

@@ -72,6 +72,21 @@ cleanup() {
 }
 trap cleanup TERM INT HUP
 
+# Terminal (official Hermes app) connects by SSH to 127.0.0.1:2222 as admin. Port 22 cannot
+# bind inside proot on a non-rooted phone, so sshd listens on 2222; UsePAM=no avoids PAM (no
+# systemd in proot) and password auth reads /etc/shadow directly. The admin password is kept
+# in sync with the dashboard password by hermes-local-passwd. sshd runs in pids[] so it stops
+# with the engine; an already-running sshd (started by hand) is left alone.
+if [ -x /usr/sbin/sshd ]; then
+  mkdir -p /run/sshd
+  id admin 2>/dev/null || useradd -m -s /bin/bash admin
+  [ -f /etc/ssh/ssh_host_ed25519_key ] || ssh-keygen -A >/dev/null 2>&1
+  if ! pgrep -x sshd >/dev/null 2>&1; then
+    /usr/sbin/sshd -D -p 2222 -o UsePAM=no -o PasswordAuthentication=yes -o PermitRootLogin=no > >(sed -u 's/^/[sshd] /') 2>&1 &
+    pids+=($!)
+  fi
+fi
+
 # Hermes v0.23.0's server dashboard relies on its own gateway: the gateway owns the session store
 # (without it /api/sessions and /api/analytics answer 503 "Session store is not initialized") and runs
 # the cron scheduler. It runs with no messaging platforms too; the API server only when enabled.
