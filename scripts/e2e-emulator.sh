@@ -12,6 +12,7 @@
 set -uo pipefail
 APK=$1; OUT=${2:-e2e}; OLD_APK=${3:-}
 PKG=dev.syed.hermeslocal
+ENGINE_TAG=${ENGINE_TAG:-engine-v0.23.2-2}
 mkdir -p "$OUT"
 adb wait-for-device
 # Root shell (google_apis image) for reading app files: the CI APK is a release build, so run-as refuses it
@@ -270,7 +271,7 @@ sleep 20; snap 01-first-run-download
 wait_install 1500 "fresh install"
 check "first-run download + install finished" "$(installed_ok && echo 1 || echo 0)"
 appsh "cat files/engine/installed.json; echo; ls -la files/engine/downloads 2>&1; cat files/r/opt/hermes-local/engine-version" | tee "$OUT/fresh-installed.txt"
-check "installed.json: source default, engine-v0.23.1-2" "$(grep -q '"source":"default"' "$OUT/fresh-installed.txt" && grep -q 'engine-v0.23.1-2' "$OUT/fresh-installed.txt" && echo 1 || echo 0)"
+check "installed.json: source default, $ENGINE_TAG" "$(grep -q '"source":"default"' "$OUT/fresh-installed.txt" && grep -Fq "\"tag\":\"$ENGINE_TAG\"" "$OUT/fresh-installed.txt" && echo 1 || echo 0)"
 check "download deleted after unpacking (downloads/ empty), no r.partial" "$([ -z "$(appsh 'ls files/engine/downloads' 2>/dev/null | tr -d '\r')" ] && ! appsh 'ls files/r.partial' >/dev/null 2>&1 && echo 1 || echo 0)"
 mt=$(appsh "stat -c %Y files/r/opt/hermes/hermes-agent/hermes_cli/__init__.py" | tr -d '\r')
 note "hermes_cli/__init__.py mtime $mt, app started $t0 (the unpack ran after that)"
@@ -293,7 +294,14 @@ kill -INT $REC 2>/dev/null; sleep 3; adb pull /sdcard/lever-on.mp4 "$S/lever-on.
 # login_check tees its lines: keep them out of the $( ) value (test5 run 10 failed this check on a 200/401/200 dashboard)
 check "fresh: dashboard up, password gate on, login works" "$([ $ok = 1 ] && login_check "$OUT/dashboard-check.txt" >/dev/null && echo 1 || echo 0)"
 boot_kb=$(kb); note "data after first boot: $((boot_kb / 1024)) MiB ($boot_kb KiB)"
-check "data after first boot below 2.6 GB (x86_64 engine; arm64 is smaller)" "$([ "$boot_kb" -gt 0 ] && [ "$boot_kb" -lt 2539062 ] && echo 1 || echo 0)"
+check "data after first boot below 3.6 GB (x86_64 engine)" "$([ "$boot_kb" -gt 0 ] && [ "$boot_kb" -lt 3515625 ] && echo 1 || echo 0)"
+
+if [ "$ok" = 1 ]; then
+  for tool in browser terminal code mcp antigravity; do
+    guest "timeout 140 /opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_runtime_check.py $tool" 160 | tee "$OUT/runtime-$tool.txt"
+    check "Android runtime $tool" "$(grep -qx "HL_RUNTIME_OK $tool" "$OUT/runtime-$tool.txt" && echo 1 || echo 0)"
+  done
+fi
 
 prov_ok=1
 if [ "$ok" = 1 ]; then providers_e2e || prov_ok=0; else prov_ok=0; fi
@@ -406,11 +414,11 @@ if [ -n "$OLD_APK" ]; then
   t1=$(date +%s)
   adb shell am start -n $PKG/.MainActivity
   sleep 20; snap 41-upgrade-downloading
-  for _ in $(seq 1 300); do appsh "grep -q engine-v0.23.1-2 files/engine/installed.json" >/dev/null 2>&1 && ! appsh "ls files/r.partial" >/dev/null 2>&1 && break; sleep 5; done
+  for _ in $(seq 1 300); do appsh "grep -Fq '$ENGINE_TAG' files/engine/installed.json" >/dev/null 2>&1 && ! appsh "ls files/r.partial" >/dev/null 2>&1 && break; sleep 5; done
   sleep 15; echo "upgrade: engine replaced after $(( $(date +%s) - t1 ))s" | tee -a "$OUT/checks.txt"
   snap 42-after-upgrade
   appsh "cat files/engine/installed.json; echo; ls files/engine/downloads; cat files/r/opt/hermes-local/engine-version | head -3; ls files/r/root/.local/share 2>&1" | tee "$OUT/upgrade-installed.txt"
-  check "upgrade: the engine updated itself to engine-v0.23.1-2 (download)" "$(grep -q '"source":"default"' "$OUT/upgrade-installed.txt" && grep -q 'hermes_ref=v0.23.1' "$OUT/upgrade-installed.txt" && echo 1 || echo 0)"
+  check "upgrade: the engine updated itself to $ENGINE_TAG (download)" "$(grep -q '"source":"default"' "$OUT/upgrade-installed.txt" && grep -Fq "\"tag\":\"$ENGINE_TAG\"" "$OUT/upgrade-installed.txt" && echo 1 || echo 0)"
   guest "$SESSIONS
 /bin/bash /opt/hermes-local/bin/hermes-local-auth status; /bin/bash /opt/hermes-local/bin/hermes-local-passwd --check && echo PASSWORD_OK; cat /root/my-notes.txt /root/.hermes/memories/e2e-marker.md; ls /root/.hermes/installs/*/environments; cat /root/.hermes/installs/*/facts.json | grep environment; ls -d /root/.local/share/uv 2>&1" 180 | tee "$OUT/upgrade-after.txt"
   check "upgrade: password kept" "$(grep -q PASSWORD_OK "$OUT/upgrade-after.txt" && echo 1 || echo 0)"

@@ -116,6 +116,13 @@ if [ "$rc" = 0 ]; then
     echo "   $ep -> $code $(head -c 100 "$work/ep.json" | tr '\n' ' ')"
     check "GET $ep" "$([ "$code" = 200 ] && echo 1 || echo 0)"
   done
+  echo "== local runtime tools"
+  for tool in browser terminal code mcp antigravity; do
+    run timeout 140 /opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_runtime_check.py "$tool" \
+      >"$work/runtime-$tool.log" 2>&1
+    cat "$work/runtime-$tool.log"
+    check "local runtime $tool" "$(grep -qx "HL_RUNTIME_OK $tool" "$work/runtime-$tool.log" && echo 1 || echo 0)"
+  done
   echo "== plugin install from inside the engine (catalog git plugin, no deps)"
   run /bin/bash -lc 'timeout 300 hermes plugins install quota --enable --yes-deps </dev/null 2>&1 | tail -n 4'
   for _ in 1 2 3; do # rich wraps to 80 columns without a tty; COLUMNS keeps one row per plugin
