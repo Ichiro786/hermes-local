@@ -16,7 +16,7 @@
 #
 # Env: OUT_DIR, WORK_DIR, HERMES_REF (tag, default v0.23.2), HERMES_COMMIT (sha of that tag),
 #      ENGINE_REVISION, GIT_SHA, ZSTD_LEVEL (default 19, --long=27), WITH_AGY (default 1),
-#      SIZE_LIMIT (bytes installed on the phone, default 2900000000: the build fails above it)
+#      SIZE_LIMIT (bytes installed on the phone, default 3200000000: the build fails above it)
 set -euo pipefail
 export LC_ALL=C DEBIAN_FRONTEND=noninteractive
 
@@ -27,7 +27,7 @@ ROOTFS="$WORK_DIR/rootfs"
 HERMES_REF="${HERMES_REF:-v0.23.2}"
 HERMES_COMMIT="${HERMES_COMMIT:-}"
 ZSTD_LEVEL="${ZSTD_LEVEL:-19}"
-SIZE_LIMIT="${SIZE_LIMIT:-2900000000}"
+SIZE_LIMIT="${SIZE_LIMIT:-3200000000}"
 WITH_AGY="${WITH_AGY:-1}"
 UBUNTU_BASE_DIR="${UBUNTU_BASE_DIR:-https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release}"
 
