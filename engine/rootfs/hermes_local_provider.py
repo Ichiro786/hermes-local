@@ -4,7 +4,7 @@
 Runs on Hermes' own python (see hermes-local-auth). Uses the same code paths as the dashboard's
 /api/model/options and /api/model/set, so a choice made here is what chat uses.
 
-  status                 one JSON object: codex/antigravity sign-in, accounts, current model
+  status                 one JSON object: codex/antigravity/claude/nous sign-in, accounts, current model
   models <provider>      JSON {"provider", "models": [...], "recommended"}
   use <provider> [model] make <provider> (and <model>, default: Hermes' recommended one) the main model
   ensure <provider>      `use` only when no main provider is configured yet
@@ -21,6 +21,10 @@ except ImportError:
 
 CODEX = "openai-codex"
 AGY = "antigravity-oauth"
+ANTHROPIC = "anthropic"
+NOUS = "nous"
+# Chat-model fallback order: the first other provider that is signed in wins.
+PROVIDERS = (CODEX, AGY, ANTHROPIC, NOUS)
 TOKEN_FILES = ("jetski-standalone-oauth-token", "antigravity-oauth-token")
 
 
@@ -37,16 +41,24 @@ def _current():
     return {"provider": str(m.get("provider") or ""), "model": str(m.get("default") or m.get("name") or "")}
 
 
-def _codex_entries():
+def _pool_entries(provider):
     try:
         from agent.credential_pool import load_pool
-        return list(load_pool(CODEX).entries())
+        return list(load_pool(provider).entries())
     except Exception:  # noqa: BLE001
         return []
 
 
+def _pool_accounts(provider):
+    return [str(e.label or e.id) for e in _pool_entries(provider)]
+
+
+def _codex_entries():
+    return _pool_entries(CODEX)
+
+
 def _codex_accounts():
-    return [str(e.label or e.id) for e in _codex_entries()]
+    return _pool_accounts(CODEX)
 
 
 def prune(provider):
@@ -61,15 +73,20 @@ def prune(provider):
     return 0
 
 
+def _signed_in(provider):
+    if provider == AGY:
+        return _agy_signed_in()
+    return bool(_pool_entries(provider))
+
+
 def fallback(provider):
-    """After signing out of the main provider, move chat to the other one when it is signed in."""
+    """After signing out of the main provider, move chat to another signed-in one."""
     if _current()["provider"] != provider:
         print(json.dumps({"ok": True, "kept": True, **_current()}))
         return 0
-    other = AGY if provider == CODEX else CODEX
-    signed = _agy_signed_in() if other == AGY else bool(_codex_entries())
-    if signed:
-        return use(other)
+    for other in PROVIDERS:
+        if other != provider and _signed_in(other):
+            return use(other)
     print(json.dumps({"ok": True, "signed_out": provider}))
     return 0
 
@@ -90,11 +107,17 @@ def _active_provider():
 def status():
     import shutil
     accounts = _codex_accounts()
+    nous_accounts = _pool_accounts(NOUS)
+    anthropic_accounts = _pool_accounts(ANTHROPIC)
     out = {
         "codex": 1 if accounts else 0,
         "codex_accounts": accounts,
         "antigravity": 1 if _agy_signed_in() else 0,
         "agy": 1 if shutil.which("agy") else 0,
+        "nous": 1 if nous_accounts else 0,
+        "nous_accounts": nous_accounts,
+        "anthropic": 1 if anthropic_accounts else 0,
+        "anthropic_accounts": anthropic_accounts,
         "active_provider": _active_provider(),
         **{f"model_{k}": v for k, v in _current().items()},
     }
