@@ -32,4 +32,16 @@ basic["secret"] = secrets.token_urlsafe(32)  # new secret: old sessions end on p
 if ensure_basic_auth_plugin_enabled_in_config:
     ensure_basic_auth_plugin_enabled_in_config(cfg)
 save_config(cfg)
+# The official Hermes app's Terminal logs in by SSH as this same user, so keep the system
+# password in sync with the dashboard password. Best-effort only: the dashboard password
+# above is already saved, and a failure here must not fail the password change.
+try:
+    import subprocess
+    try:
+        subprocess.run(["id", username], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        subprocess.run(["useradd", "-m", "-s", "/bin/bash", username], check=True)
+    subprocess.run(["chpasswd"], input=f"{username}:{password}\n", text=True, check=True)
+except Exception as e:
+    print(f"warning: could not set the system password for {username}: {e}", file=sys.stderr)
 print("ok")
