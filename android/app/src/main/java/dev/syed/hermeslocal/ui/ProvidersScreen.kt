@@ -20,9 +20,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Chat
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.RocketLaunch
 import androidx.compose.material.icons.rounded.ViewInAr
 import androidx.compose.material.icons.rounded.VpnKey
@@ -87,11 +89,13 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
     LaunchedEffect(codexSignedIn) { if (codexSignedIn != null) VoiceKey.refresh() }
 
     // Open the browser once per URL, and only after what the user needs is on screen:
-    // Codex: the code (copied too); Antigravity: the link (it has no code to show first).
+    // Codex and Nous are device-code flows: the code (copied too); Antigravity and Claude
+    // show the link first (their code, if any, is pasted back into the app).
+    val needsCodeFirst = { p: ProviderId -> p == ProviderId.Codex || p == ProviderId.Nous }
     for (p in ProviderId.entries) {
         val f = flows[p]
         val ready = f != null && f.running && f.url != null && f.url != f.opened &&
-            (p != ProviderId.Codex || f.code != null)
+            (!needsCodeFirst(p) || f.code != null)
         LaunchedEffect(p, ready, f?.url) {
             if (ready && f != null) {
                 ProviderFlows.markOpened(p, f.url!!)
@@ -118,14 +122,21 @@ fun ProvidersScreen(@Suppress("UNUSED_PARAMETER") status: EngineStatus, onBack: 
             ) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (p == ProviderId.Codex) Icons.Rounded.Code else Icons.Rounded.RocketLaunch, null, Modifier.size(24.dp))
+                        Icon(
+                            when (p) {
+                                ProviderId.Codex -> Icons.Rounded.Code
+                                ProviderId.Antigravity -> Icons.Rounded.RocketLaunch
+                                ProviderId.Claude -> Icons.Rounded.Chat
+                                ProviderId.Nous -> Icons.Rounded.Psychology
+                            }, null, Modifier.size(24.dp),
+                        )
                         Spacer(Modifier.width(14.dp))
                         Text(p.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                         if (info == null) LoadingIndicator(Modifier.size(28.dp)) else StatusDot(signedIn)
                     }
                     Text(p.blurb, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (signedIn && p == ProviderId.Codex && info?.codexAccounts?.isNotEmpty() == true) {
-                        Text("Account: ${info.codexAccounts.joinToString()}", style = MaterialTheme.typography.bodySmall)
+                    if (signedIn && info?.accounts(p)?.isNotEmpty() == true) {
+                        Text("Account: ${info.accounts(p).joinToString()}", style = MaterialTheme.typography.bodySmall)
                     }
                     if (signedIn && info != null) {
                         if (info.isChatProvider(p)) {
@@ -399,7 +410,7 @@ private fun FlowPanel(f: SignInFlow, onSendCode: (String) -> Unit, onCancel: () 
         Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        val waitingForLink = f.running && (f.url == null || (f.provider == ProviderId.Codex && f.code == null))
+        val waitingForLink = f.running && (f.url == null || ((f.provider == ProviderId.Codex || f.provider == ProviderId.Nous) && f.code == null))
         if (waitingForLink || f.phase == FlowPhase.Verifying) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LoadingIndicator(Modifier.size(28.dp)); Spacer(Modifier.width(8.dp))
@@ -415,15 +426,15 @@ private fun FlowPanel(f: SignInFlow, onSendCode: (String) -> Unit, onCancel: () 
                 }
             }
             val url = f.url
-            if (url != null && (f.provider != ProviderId.Codex || f.code != null)) {
+            if (url != null && (f.provider != ProviderId.Codex && f.provider != ProviderId.Nous || f.code != null)) {
                 Text(url, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, maxLines = 3)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilledTonalButton(onClick = { AppController.openUrl(ctx, url) }, shapes = ButtonDefaults.shapes()) { Text("Open link") }
                     TextButton(onClick = { AppController.copy("Sign-in link", url) }) { Text("Copy link") }
                 }
             }
-            if (f.provider == ProviderId.Antigravity && f.wantsCode) {
-                OutlinedTextField(pasted, { pasted = it }, label = { Text("Paste the code from Google") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            if ((f.provider == ProviderId.Antigravity || f.provider == ProviderId.Claude) && f.wantsCode) {
+                OutlinedTextField(pasted, { pasted = it }, label = { Text(if (f.provider == ProviderId.Claude) "Paste the code from Claude" else "Paste the code from Google") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Button(onClick = { onSendCode(pasted); pasted = "" }, enabled = pasted.isNotBlank(), shapes = ButtonDefaults.shapes()) { Text("Submit code") }
             }
             f.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }

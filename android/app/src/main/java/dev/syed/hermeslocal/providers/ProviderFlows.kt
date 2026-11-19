@@ -24,6 +24,14 @@ enum class ProviderId(val id: String, val hermesId: String, val title: String, v
         "antigravity", "antigravity-oauth", "Antigravity (Gemini, Claude)", "Antigravity",
         "Google sign-in through the official agy CLI. Paste the code from Google back here.",
     ),
+    Nous(
+        "nous", "nous", "Nous (Hermes)", "Nous",
+        "Sign in with your Nous Portal account for the free Hermes models. Open the link, enter the code.",
+    ),
+    Claude(
+        "claude", "anthropic", "Claude (Anthropic)", "Claude",
+        "Sign in with your Claude Pro/Max subscription. Open the link, authorize, paste the code back here.",
+    ),
 }
 
 enum class FlowPhase { Starting, Waiting, Verifying, Done, Failed, Cancelled }
@@ -51,11 +59,29 @@ data class ProviderStatus(
     val codexAccounts: List<String> = emptyList(),
     val antigravity: Boolean = false,
     val agy: Boolean = true,
+    val nous: Boolean = false,
+    val nousAccounts: List<String> = emptyList(),
+    val anthropic: Boolean = false,
+    val anthropicAccounts: List<String> = emptyList(),
     val modelProvider: String = "",
     val model: String = "",
     val error: String? = null,
 ) {
-    fun signedIn(p: ProviderId) = if (p == ProviderId.Codex) codex else antigravity
+    fun signedIn(p: ProviderId) = when (p) {
+        ProviderId.Codex -> codex
+        ProviderId.Antigravity -> antigravity
+        ProviderId.Nous -> nous
+        ProviderId.Claude -> anthropic
+    }
+
+    /** Pool account labels for the provider, if any. */
+    fun accounts(p: ProviderId) = when (p) {
+        ProviderId.Codex -> codexAccounts
+        ProviderId.Antigravity -> emptyList()
+        ProviderId.Nous -> nousAccounts
+        ProviderId.Claude -> anthropicAccounts
+    }
+
     fun isChatProvider(p: ProviderId) = modelProvider == p.hermesId
 
     companion object {
@@ -66,11 +92,17 @@ data class ProviderStatus(
                 val o = JSONObject(json)
                 if (o.has("error") && !o.has("codex")) return ProviderStatus(error = o.optString("error"))
                 val acc = o.optJSONArray("codex_accounts")
+                val nousAcc = o.optJSONArray("nous_accounts")
+                val anthropicAcc = o.optJSONArray("anthropic_accounts")
                 ProviderStatus(
                     codex = o.optInt("codex") == 1,
                     codexAccounts = (0 until (acc?.length() ?: 0)).map { acc!!.optString(it) },
                     antigravity = o.optInt("antigravity") == 1,
                     agy = o.optInt("agy", 1) == 1,
+                    nous = o.optInt("nous") == 1,
+                    nousAccounts = (0 until (nousAcc?.length() ?: 0)).map { nousAcc!!.optString(it) },
+                    anthropic = o.optInt("anthropic") == 1,
+                    anthropicAccounts = (0 until (anthropicAcc?.length() ?: 0)).map { anthropicAcc!!.optString(it) },
                     modelProvider = o.optString("model_provider"),
                     model = o.optString("model_model"),
                 )
@@ -93,8 +125,8 @@ object ProviderFlows {
 
     /** No URL/code within this long after start: the flow failed (proot cold start included). */
     const val START_TIMEOUT_MS = 120_000L
-    /** Hermes polls OpenAI for 15 min; agy waits for the code. */
-    private fun totalTimeoutMs(p: ProviderId) = if (p == ProviderId.Codex) 16 * 60_000L else 11 * 60_000L
+    /** Hermes polls the device-code providers for ~15 min; agy waits for the code. */
+    private fun totalTimeoutMs(p: ProviderId) = if (p == ProviderId.Antigravity) 11 * 60_000L else 16 * 60_000L
 
     private val _flows = MutableStateFlow<Map<ProviderId, SignInFlow>>(emptyMap())
     val flows: StateFlow<Map<ProviderId, SignInFlow>> = _flows.asStateFlow()

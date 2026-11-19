@@ -1,10 +1,13 @@
 #!/bin/bash
 # Hermes Local: provider sign-in helper used by the app's Providers screen.
-#   hermes-local-auth status                  one JSON line: codex/antigravity sign-in, accounts, main model
+#   hermes-local-auth status                  one JSON line: codex/antigravity/claude/nous sign-in, accounts, main model
 #   hermes-local-auth login codex             Hermes' device-code login; prints HL_URL / HL_CODE / HL_DONE
 #   hermes-local-auth login antigravity       agy Google sign-in; prints HL_URL / HL_PROMPT, reads the code
 #                                             on stdin, prints HL_DONE
-#   hermes-local-auth logout codex|antigravity
+#   hermes-local-auth login nous              Hermes' Nous Portal device-code login; prints HL_URL / HL_CODE / HL_DONE
+#   hermes-local-auth login claude            Hermes' Claude OAuth PKCE login; prints HL_URL / HL_PROMPT, reads the
+#                                             authorization code on stdin, prints HL_DONE
+#   hermes-local-auth logout codex|antigravity|nous|claude
 #   hermes-local-auth models <provider>       JSON {"models": [...], "recommended": ...}
 #   hermes-local-auth use <provider> [model]  set the main chat model (what the dashboard and apps use)
 # After a successful login the provider becomes the main model when none is configured yet.
@@ -28,7 +31,7 @@ hermes_py() { # Hermes' own python (the launcher is a /bin/sh wrapper around it)
 }
 provider() { local py; py=$(hermes_py) || { echo '{"ok": false, "error": "Hermes python not found"}'; return 1; }
   (cd /opt/hermes/hermes-agent && "$py" -I "$BIN/hermes_local_provider.py" "$@"); }
-id_of() { case "$1" in codex) echo openai-codex ;; antigravity) echo antigravity-oauth ;; *) echo "$1" ;; esac; }
+id_of() { case "$1" in codex) echo openai-codex ;; antigravity) echo antigravity-oauth ;; claude) echo anthropic ;; *) echo "$1" ;; esac; }
 
 case "${1:-status}" in
 status) provider status ;;
@@ -46,7 +49,15 @@ login)
       echo "HL_MODEL $(provider ensure antigravity-oauth)"
     fi
     exit $rc ;;
-  *) echo "usage: login codex|antigravity" >&2; exit 2 ;;
+  nous)
+    python3 -u "$BIN/hermes_local_nous_login.py"; rc=$?
+    if [ $rc = 0 ]; then echo "HL_MODEL $(provider ensure nous)"; fi
+    exit $rc ;;
+  claude)
+    python3 -u "$BIN/hermes_local_claude_login.py"; rc=$?
+    if [ $rc = 0 ]; then echo "HL_MODEL $(provider ensure anthropic)"; fi
+    exit $rc ;;
+  *) echo "usage: login codex|antigravity|nous|claude" >&2; exit 2 ;;
   esac
   ;;
 logout)
@@ -55,7 +66,9 @@ logout)
   antigravity)
     rm -f /root/.gemini/antigravity-cli/*oauth-token* 2>/dev/null
     echo "Signed out of Antigravity"; rc=0 ;;
-  *) echo "usage: logout codex|antigravity" >&2; exit 2 ;;
+  nous) hermes auth logout nous </dev/null; rc=$? ;;
+  claude) hermes auth logout anthropic </dev/null; rc=$? ;;
+  *) echo "usage: logout codex|antigravity|nous|claude" >&2; exit 2 ;;
   esac
   provider fallback "$(id_of "$2")" >/dev/null 2>&1 || true
   exit $rc

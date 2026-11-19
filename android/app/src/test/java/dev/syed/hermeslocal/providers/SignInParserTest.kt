@@ -91,6 +91,37 @@ class SignInParserTest {
         }
     }
 
+    @Test fun nousAndClaudeHelperMarkers() {
+        // The exact HL_* lines hermes_local_nous_login.py and hermes_local_claude_login.py
+        // emit for the upstream flows (Nous device code, Claude PKCE). The parser must turn
+        // them into the same events the app already handles for Codex (URL + code) and
+        // Antigravity (URL + prompt).
+        val nous = events(
+            listOf(
+                "HL_RAW Starting Hermes login via nous...",
+                "HL_URL https://portal.nousresearch.com/device?user_code=ABCD-EFGH",
+                "HL_CODE ABCD-EFGH",
+                "HL_STATE waiting",
+                "HL_DONE ok Saved nous OAuth device-code credentials: \"nous-oauth-1\"",
+            ),
+        )
+        assertEquals("https://portal.nousresearch.com/device?user_code=ABCD-EFGH", nous.filterIsInstance<SignInParser.Event.Url>().single().url)
+        assertEquals("ABCD-EFGH", nous.filterIsInstance<SignInParser.Event.Code>().single().code)
+        assertEquals(SignInParser.Event.Done(true, "Saved nous OAuth device-code credentials: \"nous-oauth-1\""), nous.filterIsInstance<SignInParser.Event.Done>().single())
+
+        val claude = events(
+            listOf(
+                "HL_URL https://claude.ai/oauth/authorize?code=true&client_id=x&response_type=code&redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback&scope=s&code_challenge=c&code_challenge_method=S256&state=y",
+                "HL_STATE paste-code",
+                "HL_PROMPT code",
+                "HL_DONE ok Added anthropic OAuth credential #1: \"claude-oauth-1\"",
+            ),
+        )
+        assertTrue(claude.filterIsInstance<SignInParser.Event.Url>().single().url.startsWith("https://claude.ai/oauth/authorize?"))
+        assertEquals(1, claude.count { it == SignInParser.Event.Prompt })
+        assertEquals(SignInParser.Event.Done(true, "Added anthropic OAuth credential #1: \"claude-oauth-1\""), claude.filterIsInstance<SignInParser.Event.Done>().single())
+    }
+
     @Test fun markersAndEdgeCases() {
         val p = SignInParser()
         assertEquals(SignInParser.Event.Done(true, "token saved"), p.feed("HL_DONE ok token saved"))
