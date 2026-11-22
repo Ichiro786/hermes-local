@@ -506,12 +506,12 @@ if [ -n "$OLD_APK" ]; then
     '/opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_provider.py ensure openai-codex 2>&1 | tail -n 1' \
     'echo upgrade-marker >/root/my-notes.txt; mkdir -p /root/.hermes/memories && echo remember-me >/root/.hermes/memories/e2e-marker.md')" 240 | tee "$OUT/upgrade-setup.txt"
   adb shell am start -n $PKG/.MainActivity --ez ci_toggle true
-  port_open 200 >/dev/null; guest "$CHATPY" 240 | grep -E "CHAT_" | cut -c1-200 | tee "$OUT/upgrade-chat-old build.txt"
+  port_open 200 >/dev/null; guest "$CHATPY" 240 | grep -E "CHAT_" | cut -c1-200 | tee "$OUT/upgrade-chat-old.txt"
   guest "$SESSIONS
 /bin/bash /opt/hermes-local/bin/hermes-local-auth status; cat /root/.hermes/installs/*/facts.json | grep environment; cat /opt/hermes-local/engine-version | head -3" 120 | tee "$OUT/upgrade-before.txt"
   old_env=$(grep -o 'environments/[0-9a-f]*' "$OUT/upgrade-before.txt" | head -n1)
   old_kb=$(kb); note "old build: data $((old_kb / 1024)) MiB, env $old_env, $(grep SESSIONS "$OUT/upgrade-before.txt")"
-  check "old build baseline: chat session created with the stub sign-in" "$(grep -q '^CHAT_OK' "$OUT/upgrade-chat-old build.txt" && echo 1 || echo 0)"
+  check "old build baseline: chat session created with the stub sign-in" "$(grep -q '^CHAT_OK' "$OUT/upgrade-chat-old.txt" && echo 1 || echo 0)"
   adb shell am start -n $PKG/.MainActivity --ez ci_toggle false; port_closed
   snap 40-old build-before-upgrade
   echo "== install new build over old build"
@@ -539,8 +539,8 @@ if [ -n "$OLD_APK" ]; then
   adb shell am start -n $PKG/.MainActivity --ez ci_toggle true
   port_open 200 && login_check "$OUT/dashboard-after-upgrade.txt" >/dev/null; r=$?
   check "upgrade: dashboard login with the old password" "$([ $r = 0 ] && echo 1 || echo 0)"
-  guest "$CHATPY" 240 | grep -E "CHAT_" | cut -c1-200 | tee "$OUT/upgrade-chat-new build.txt"
-  check "upgrade: chat still works on the carried sign-in + model setting (new dependency env)" "$(grep -q '^CHAT_OK' "$OUT/upgrade-chat-new build.txt" && echo 1 || echo 0)"
+  guest "$CHATPY" 240 | grep -E "CHAT_" | cut -c1-200 | tee "$OUT/upgrade-chat-new.txt"
+  check "upgrade: chat still works on the carried sign-in + model setting (new dependency env)" "$(grep -q '^CHAT_OK' "$OUT/upgrade-chat-new.txt" && echo 1 || echo 0)"
   snap 43-upgraded-running
   adb shell am start -n $PKG/.MainActivity --ez ci_toggle false; port_closed
   appsh "cat files/engine/logs/engine.log" >"$OUT/engine-upgrade.log" 2>/dev/null || true
