@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Everything stays HTTPS-only (the platform default) except this phone's own loopback, where the app probes the
+     local Hermes dashboard over plain HTTP (http://127.0.0.1:<port>/api/health). Without this, Android blocks the
+     probe as cleartext and Home shows "Dashboard is not answering" on a healthy dashboard. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

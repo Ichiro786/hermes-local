@@ -364,6 +364,7 @@ for path in /api/health /api/auth/providers; do
   note "probe $path: $(curl -s -o /dev/null -m 10 -w '%{http_code} %{time_total}s' "http://127.0.0.1:19119$path" 2>&1)"
 done
 check "Home shows no stale 'Dashboard is not answering' while the dashboard answers" "$(grep -q 'Dashboard is not answering' "$T/main-after-probe.xml" && echo 0 || echo 1)"
+appsh "grep 'health probe failed' files/engine/logs/engine.log | tail -n 3" | tr -d '\r' | sed 's/^/NOTE app probe: /' | tee -a "$OUT/checks.txt"
 check "theme screenshots taken (3 seeds x AMOLED/dark + dynamic off)" "$([ "$(ls "$T"/*.png 2>/dev/null | wc -l)" -ge 25 ] && echo 1 || echo 0)"
 
 echo "== lever off, then a plugin with Python deps, then Storage > Clean up"

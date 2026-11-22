@@ -157,6 +157,7 @@ class EngineService : Service() {
                 // a slow spell is over (e2e run 12: a Storage scan kept the message up for good)
                 EngineState.set { if (it.message == NOT_ANSWERING) it.copy(message = null) else it }
             } else if (EngineState.status.value.phase == Phase.Running && ++misses >= 2) {
+                if (EngineState.status.value.message != NOT_ANSWERING) log("--- health probe failed twice: $lastProbeError ${stamp()}")
                 EngineState.set { it.copy(message = NOT_ANSWERING) }
             }
         }
@@ -348,10 +349,15 @@ class EngineService : Service() {
             c.connectTimeout = 1500; c.readTimeout = 5000 // busy IO (Storage scan, installs) can slow a healthy dashboard past 2 s
             val code = c.responseCode
             c.disconnect()
+            if (code !in 200..499) lastProbeError = "HTTP $code"
             code in 200..499
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            lastProbeError = "${e.javaClass.simpleName}: ${e.message}"
             false
         }
+
+        /** Why the last failed probe failed (engine log, when Home starts saying "not answering"). */
+        @Volatile private var lastProbeError: String? = null
 
         fun logFile(context: Context): File = EnginePaths(context).engineLog
     }
