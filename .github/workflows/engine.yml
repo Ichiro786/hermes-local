@@ -118,6 +118,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      # Curated release notes (engine/release-notes/<tag>.md) when the repository has them.
+      - uses: actions/checkout@v4
+        with: { path: src, sparse-checkout: engine/release-notes }
       - uses: actions/download-artifact@v4
         with:
           path: dl
@@ -135,7 +138,9 @@ jobs:
             [ -f "out/rootfs-$f.tar.zst" ] || { echo "::error::$f payload missing; not publishing"; exit 1; }
             grep -qx "chroot=success proot=success" "out/smoke-$f.txt" || { echo "::error::$f smoke failed ($(cat out/smoke-$f.txt 2>/dev/null)); not publishing"; exit 1; }
           done
+          curated="src/engine/release-notes/$TAG.md"
           {
+            if [ -f "$curated" ]; then cat "$curated"; echo; echo "## Assets"; echo; fi
             echo "Hermes Local engine payload (tar + zstd -19 --long=27; slim: one dependency generation, no .git/node_modules/tests/TUI/desktop/gcc): Hermes Agent ${{ inputs.hermes_ref }}, Ubuntu 24.04, local Chromium, antigravity-oauth plugin, agy CLI, voice (edge-tts, cloud speech-to-text from the user's OpenAI/Gemini key, live voice bridge: GPT-Live via ChatGPT/Codex sign-in or Gemini Live; no local Whisper)."
             echo
             for f in out/rootfs-*.tar.zst; do a=$(basename "$f" .tar.zst); a=${a#rootfs-}; echo "- \`$(basename "$f")\`: $(( $(stat -c %s "$f") / 1048576 )) MiB, sha256 \`$(cut -d' ' -f1 "$f.sha256")\`, installed $(( $(jq .installed_disk_bytes "out/engine-$a.json") / 1048576 )) MiB"; done
@@ -149,3 +154,16 @@ jobs:
           else
             gh release create "$TAG" out/* --target "$GITHUB_SHA" --title "Engine ${TAG#engine-}" --notes-file notes.md --latest=false --repo "$GITHUB_REPOSITORY"
           fi
+      - name: Public download check (no token, like the app)
+        env:
+          TAG: engine-${{ inputs.hermes_ref }}-${{ inputs.revision }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          for a in $(jq -r '.[]' <<<'${{ inputs.archs }}'); do
+            want=$(env -u GH_TOKEN curl -fsSL --retry 5 "$base/rootfs-$a.tar.zst.sha256" | cut -d' ' -f1)
+            got=$(env -u GH_TOKEN curl -fsSL --retry 5 "$base/rootfs-$a.tar.zst" | sha256sum | cut -d' ' -f1)
+            echo "rootfs-$a.tar.zst: published sha256 $want, downloaded $got"
+            [ "$want" = "$got" ] || { echo "::error::public download of rootfs-$a.tar.zst does not match its sha256"; exit 1; }
+          done
+          echo "PUBLIC_DOWNLOAD_OK $TAG"
