@@ -43,6 +43,11 @@ class EngineService : Service() {
     private lateinit var governor: PowerGovernor
     private var lastNotification: Notification? = null
     @Volatile private var stopping = false
+    /** The stop in progress (kill + cleanup); a start that arrives meanwhile waits for it, see [pendingStart]. */
+    private var stopJob: Job? = null
+    /** A start (lever, auto-wake) arrived while a stop was still running: start again once it is done. */
+    @Volatile private var pendingStart = false
+    private var startSource: String? = null
     private var restarts = 0
     private lateinit var paths: EnginePaths
     private lateinit var settings: Settings
@@ -67,7 +72,10 @@ class EngineService : Service() {
                 EngineState.set { it.copy(phase = Phase.Starting, runningSince = 0L) }
                 killProcess(); runJob?.join(); runJob = null; restarts = 0; startEngine()
             }
-            else -> if (intent == null && !settings.wantRunning) stopSelfClean() else startEngine()
+            else -> if (intent == null && !settings.wantRunning) stopSelfClean() else {
+                startSource = intent?.getStringExtra(EXTRA_SOURCE)
+                startEngine()
+            }
         }
         return START_STICKY
     }
@@ -78,8 +86,10 @@ class EngineService : Service() {
         ServiceCompat.startForeground(this, NOTIFICATION_ID, n, type)
     }
 
+    @Synchronized
     private fun startEngine() {
-        if (runJob?.isActive == true) return
+        if (runJob?.isActive == true) return // already starting or running: never a second Hermes
+        if (stopJob?.isActive == true) { pendingStart = true; return } // started again while stopping: after the stop
         stopping = false
         settings.wantRunning = true
         val s = settings.value
@@ -94,7 +104,7 @@ class EngineService : Service() {
         writeSettingsEnv(s)
         rotateLog()
         EngineState.clearLines()
-        log("--- start ${stamp()} port=${s.port} lan=${s.lanAccess} api=${s.apiServer}")
+        log("--- start ${stamp()} port=${s.port} lan=${s.lanAccess} api=${s.apiServer}${startSource?.let { " source=$it" } ?: ""}")
         val p = try {
             ProotCommand.processBuilder(paths, listOf("/bin/bash", "/opt/hermes-local/bin/hermes-local-start")).start()
         } catch (e: Exception) {
@@ -137,7 +147,9 @@ class EngineService : Service() {
     private suspend fun healthLoop(port: Int) {
         var misses = 0
         while (scope.isActive) {
-            delay(if (EngineState.status.value.phase == Phase.Running) 60_000 else 1000)
+            val st = EngineState.status.value
+            // Once flagged as not answering, check again soon so the warning clears as soon as the dashboard is back.
+            delay(if (st.phase != Phase.Running) 1000 else if (st.message == NOT_ANSWERING) 5_000 else 60_000)
             val ok = probe(port)
             if (ok) {
                 misses = 0
@@ -145,6 +157,7 @@ class EngineService : Service() {
                 // a slow spell is over (e2e run 12: a Storage scan kept the message up for good)
                 EngineState.set { if (it.message == NOT_ANSWERING) it.copy(message = null) else it }
             } else if (EngineState.status.value.phase == Phase.Running && ++misses >= 2) {
+                if (EngineState.status.value.message != NOT_ANSWERING) log("--- health probe failed twice: $lastProbeError ${stamp()}")
                 EngineState.set { it.copy(message = NOT_ANSWERING) }
             }
         }
@@ -156,20 +169,35 @@ class EngineService : Service() {
         val since = System.currentTimeMillis()
         EngineState.set { it.copy(phase = Phase.Running, runningSince = since, port = port, message = null) }
         updateNotification(notification("Hermes is running · 127.0.0.1:$port", since))
+        dev.syed.hermeslocal.wake.AutoWake.cancelTapToStart(this)
     }
 
+    @Synchronized
     private fun stopEngine(userRequested: Boolean, why: String? = null) {
         if (userRequested) settings.wantRunning = false
+        pendingStart = false
+        if (stopJob?.isActive == true) return
         stopping = true
         EngineState.set { it.copy(phase = Phase.Stopping) }
         updateNotification(notification("Stopping Hermes…", 0L))
-        scope.launch {
+        stopJob = scope.launch {
             killProcess()
             runJob?.cancel()
+            runJob?.join()
             runJob = null
             EngineState.set { it.copy(phase = Phase.Stopped, runningSince = 0L, message = why) }
-            stopSelfClean()
+            afterStop()
         }
+    }
+
+    /** End of a stop: start again when a start came in meanwhile (lever slid back up, Hermes opened), else leave. */
+    private fun afterStop() = synchronized(this) {
+        stopJob = null
+        if (pendingStart) {
+            pendingStart = false
+            restarts = 0
+            startEngine()
+        } else stopSelfClean()
     }
 
     private fun killProcess() {
@@ -289,8 +317,13 @@ class EngineService : Service() {
             )
         }
 
-        fun start(context: Context) =
-            ContextCompat.startForegroundService(context, Intent(context, EngineService::class.java).setAction(ACTION_START))
+        const val EXTRA_SOURCE = "source"
+        const val SOURCE_AUTO_WAKE = "auto-wake"
+
+        fun start(context: Context, source: String? = null) =
+            ContextCompat.startForegroundService(
+                context, Intent(context, EngineService::class.java).setAction(ACTION_START).apply { source?.let { putExtra(EXTRA_SOURCE, it) } },
+            )
 
         fun stop(context: Context) {
             if (!EngineState.status.value.isOn && EngineState.status.value.phase != Phase.Stopping) {
@@ -304,18 +337,27 @@ class EngineService : Service() {
                 ContextCompat.startForegroundService(context, Intent(context, EngineService::class.java).setAction(ACTION_RESTART))
         }
 
-        /** Probe the dashboard: any HTTP answer from the auth bootstrap route means it is up. */
         private const val NOT_ANSWERING = "Dashboard is not answering"
 
+        /**
+         * Probe the dashboard: any HTTP answer below 500 from /api/health (Hermes' own liveness route, public, no
+         * work behind it) means it is up. /api/auth/providers, used before, answers 503 while no sign-in provider
+         * is registered, which read as "not answering" on a healthy dashboard.
+         */
         fun probe(port: Int): Boolean = try {
-            val c = URL("http://127.0.0.1:$port/api/auth/providers").openConnection() as HttpURLConnection
+            val c = URL("http://127.0.0.1:$port/api/health").openConnection() as HttpURLConnection
             c.connectTimeout = 1500; c.readTimeout = 5000 // busy IO (Storage scan, installs) can slow a healthy dashboard past 2 s
             val code = c.responseCode
             c.disconnect()
+            if (code !in 200..499) lastProbeError = "HTTP $code"
             code in 200..499
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            lastProbeError = "${e.javaClass.simpleName}: ${e.message}"
             false
         }
+
+        /** Why the last failed probe failed (engine log, when Home starts saying "not answering"). */
+        @Volatile private var lastProbeError: String? = null
 
         fun logFile(context: Context): File = EnginePaths(context).engineLog
     }

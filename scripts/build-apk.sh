@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds the Hermes Local APK. The engine is not bundled (since v1.0.0-test5): the app downloads
 # rootfs-<arch>.tar.zst from the engine release on first run and checks it against ENGINE_SHA256.
-#   ENGINE_TAG=engine-v0.23.2-2  ENGINE_SHA256=<sha of rootfs-<arch>.tar.zst> (or ENGINE_DIR=<dir with
+#   ENGINE_TAG=engine-v0.23.2-4  ENGINE_SHA256=<sha of rootfs-<arch>.tar.zst> (or ENGINE_DIR=<dir with
 #   rootfs-<arch>.tar.zst.sha256>; else read from the release)
 #   ABI=arm64-v8a|x86_64 (default arm64-v8a)  VERSION_NAME=1.0.0 VERSION_CODE=1  GRADLE=gradle (Gradle 9.8+)
 #   Signing: KEYSTORE_FILE + KEYSTORE_PASSWORD + KEY_ALIAS + KEY_PASSWORD (else debug-signed)
@@ -10,7 +10,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ABI=${ABI:-arm64-v8a}
 ARCH=$([ "$ABI" = x86_64 ] && echo x86_64 || echo arm64)
-ENGINE_TAG=${ENGINE_TAG:-engine-v0.23.2-2}
+ENGINE_TAG=${ENGINE_TAG:-engine-v0.23.2-4}
 VERSION_NAME=${VERSION_NAME:-1.0.0}
 VERSION_CODE=${VERSION_CODE:-1}
 GRADLE=${GRADLE:-gradle}

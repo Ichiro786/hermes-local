@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * CI only (BuildConfig.CI_HOOKS): `am start -e ci_password X --ez ci_toggle true` sets up and flips the lever;
-     * `-e ci_screen providers` opens a screen; `--ez ci_amoled/ci_dynamic` set the theme; `-e ci_guest '<bash>'` runs a command in the engine and logs its
+     * `-e ci_screen providers` opens a screen; `--ez ci_amoled/ci_dynamic` set the theme; `--ez ci_auto_wake` flips auto-wake; `-e ci_guest '<bash>'` runs a command in the engine and logs its
      * output (tag HermesLocalCI, prefix "guest:").
      */
     private fun handleCiHooks(intent: android.content.Intent?) {
@@ -67,6 +67,10 @@ class MainActivity : ComponentActivity() {
         }
         if (intent.hasExtra("ci_amoled")) intent.getBooleanExtra("ci_amoled", true).let { v -> AppController.settings.update { copy(amoled = v) } }
         if (intent.hasExtra("ci_dynamic")) intent.getBooleanExtra("ci_dynamic", true).let { v -> AppController.settings.update { copy(dynamicColor = v) } }
+        if (intent.hasExtra("ci_auto_wake")) intent.getBooleanExtra("ci_auto_wake", false).let { v ->
+            dev.syed.hermeslocal.wake.AutoWake.setEnabled(this, v)
+            android.util.Log.i("HermesLocalCI", "auto-wake: $v setup ${dev.syed.hermeslocal.wake.AutoWake.setup(this)}")
+        }
         val pw = intent.getStringExtra("ci_password")
         val toggle = if (intent.hasExtra("ci_toggle")) intent.getBooleanExtra("ci_toggle", false) else null
         AppController.scope.launch {

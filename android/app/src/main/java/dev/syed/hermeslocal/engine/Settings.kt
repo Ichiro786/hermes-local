@@ -20,6 +20,8 @@ data class SettingsSnapshot(
     val username: String = "admin",
     val passwordSet: Boolean = false,
     val engineUrl: String = "",
+    /** Auto-wake with official Hermes (opt-in; also needs Android's accessibility access for AutoWakeService). */
+    val autoWake: Boolean = false,
 )
 
 /** App settings (SharedPreferences) exposed as a StateFlow so the UI and the service share one source. */
@@ -47,6 +49,7 @@ class Settings private constructor(context: Context) {
         username = prefs.getString("username", "admin") ?: "admin",
         passwordSet = prefs.getBoolean("password_set", false),
         engineUrl = prefs.getString("engine_url", "") ?: "",
+        autoWake = prefs.getBoolean("auto_wake", false),
     )
 
     fun update(block: SettingsSnapshot.() -> SettingsSnapshot) {
@@ -64,6 +67,7 @@ class Settings private constructor(context: Context) {
             .putString("username", s.username)
             .putBoolean("password_set", s.passwordSet)
             .putString("engine_url", s.engineUrl)
+            .putBoolean("auto_wake", s.autoWake)
             .apply()
         _state.value = read()
     }

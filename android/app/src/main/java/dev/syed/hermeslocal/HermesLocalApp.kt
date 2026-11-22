@@ -11,6 +11,7 @@ class HermesLocalApp : Application() {
         super.onCreate()
         AppController.init(this)
         EngineService.createChannel(this)
+        dev.syed.hermeslocal.wake.AutoWake.loadLast(this)
         if (!EnginePaths(this).isInstalled()) EngineState.set { it.copy(phase = Phase.NotInstalled) }
     }
 }
