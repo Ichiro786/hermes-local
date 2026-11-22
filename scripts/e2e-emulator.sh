@@ -12,7 +12,7 @@
 set -uo pipefail
 APK=$1; OUT=${2:-e2e}; OLD_APK=${3:-}
 PKG=dev.syed.hermeslocal
-ENGINE_TAG=${ENGINE_TAG:-engine-v0.23.2-2}
+ENGINE_TAG=${ENGINE_TAG:-engine-v0.23.2-4}
 mkdir -p "$OUT"
 adb wait-for-device
 # Root shell (google_apis image) for reading app files: the CI APK is a release build, so run-as refuses it
@@ -301,6 +301,22 @@ if [ "$ok" = 1 ]; then
     guest "timeout 140 /opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_runtime_check.py $tool" 160 | tee "$OUT/runtime-$tool.txt"
     check "Android runtime $tool" "$(grep -qx "HL_RUNTIME_OK $tool" "$OUT/runtime-$tool.txt" && echo 1 || echo 0)"
   done
+  # Chromium under proot on Android: when Hermes' launcher gave up, launch it by hand with a longer wait and a few
+  # flag sets, to tell a slow start from a hang and see its own log (BROWSER_DIAG lines).
+  if ! grep -qx "HL_RUNTIME_OK browser" "$OUT/runtime-browser.txt"; then
+    guest 'B=$(/opt/hermes-local/bin/hermes-py -I -c "import sys; sys.path.insert(0, \"/opt/hermes/hermes-agent\"); import hermes_bootstrap; from hermes_cli.browser_runtime import chromium_executable; print(chromium_executable(allow_override=False))")
+echo "BROWSER_DIAG chromium=$B nproc=$(nproc) mem=$(free -m | awk "/Mem/{print \$2\" MiB, avail \"\$7}")"
+for flags in "" "--no-zygote" "--no-zygote --disable-gpu" "--no-zygote --disable-gpu --single-process" "--no-zygote --disable-gpu --disable-crash-reporter --disable-breakpad"; do
+  d=$(mktemp -d /tmp/hl-chrome.XXXXXX); t0=$(date +%s)
+  "$B" --headless=new --no-sandbox --disable-dev-shm-usage --remote-debugging-port=0 --user-data-dir="$d" --no-first-run $flags --enable-logging=stderr --v=0 about:blank >"$d.log" 2>&1 &
+  pid=$!; ok=0
+  for _ in $(seq 1 150); do [ -s "$d/DevToolsActivePort" ] && { ok=1; break; }; kill -0 $pid 2>/dev/null || break; sleep 1; done
+  echo "BROWSER_DIAG flags=[$flags] devtools=$ok after $(( $(date +%s) - t0 ))s alive=$(kill -0 $pid 2>/dev/null && echo 1 || echo 0) procs=$(pgrep -c -f "user-data-dir=$d")"
+  tail -n 12 "$d.log" | cut -c1-300 | sed "s/^/BROWSER_DIAG   /"
+  pkill -TERM -f "user-data-dir=$d" 2>/dev/null; sleep 2; pkill -KILL -f "user-data-dir=$d" 2>/dev/null; rm -rf "$d" "$d.log"
+  [ $ok = 1 ] && break
+done' 900 | tee "$OUT/browser-diag.txt"
+  fi
 fi
 
 prov_ok=1
@@ -342,6 +358,11 @@ done
 adb shell am start -n $PKG/.MainActivity --ez ci_dynamic true --ez ci_amoled true -e ci_screen main >/dev/null; sleep 70
 tsnap main-after-probe
 dumpui; cp "$P/cur.xml" "$T/main-after-probe.xml"
+# What the app's health probe sees right now (it uses /api/health; HTTP code and time).
+adb forward tcp:19119 tcp:9119 >/dev/null
+for path in /api/health /api/auth/providers; do
+  note "probe $path: $(curl -s -o /dev/null -m 10 -w '%{http_code} %{time_total}s' "http://127.0.0.1:19119$path" 2>&1)"
+done
 check "Home shows no stale 'Dashboard is not answering' while the dashboard answers" "$(grep -q 'Dashboard is not answering' "$T/main-after-probe.xml" && echo 0 || echo 1)"
 check "theme screenshots taken (3 seeds x AMOLED/dark + dynamic off)" "$([ "$(ls "$T"/*.png 2>/dev/null | wc -l)" -ge 25 ] && echo 1 || echo 0)"
 

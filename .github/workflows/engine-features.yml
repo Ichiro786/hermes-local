@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       engine_tag:
-        default: "engine-v0.23.2-2"
+        default: "engine-v0.23.2-4"
       arch:
         default: "arm64"
       artifact_run:

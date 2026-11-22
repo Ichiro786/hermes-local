@@ -6,13 +6,17 @@ name: Android APK
 # v1.0.0-test4 app (built from its tag with its bundled engine) to this build.
 #
 # Secrets: ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
+#
+# Update safety (the APK must install over the user's existing app without losing data): the release job checks
+# the package name, that versionCode is above min_version_code, and that the signing certificate equals
+# expected_cert_sha256 and the certificate of the APK built by compare_run (the previously distributed build).
 
 on:
   workflow_dispatch:
     inputs:
       engine_tag:
         description: "Engine release the app downloads"
-        default: "engine-v0.23.2-2"
+        default: "engine-v0.23.2-4"
       version_name:
         default: "1.0.0"
       emulator:
@@ -21,9 +25,19 @@ on:
       upgrade_from:
         description: "App tag for the upgrade test (empty = skip)"
         default: "v1.0.0-test4"
+      min_version_code:
+        description: "versionCode of the installed build; this build must be higher"
+        default: "17"
+      compare_run:
+        description: "Workflow run whose arm64 APK is the installed build (signature + package check; empty = skip)"
+        default: "44606647149"
+      expected_cert_sha256:
+        description: "SHA-256 of the release signing certificate (published with v1.0.0-test1/test2)"
+        default: "6b4eea786e5d6f126828ab2d650295d85a89bfab4189b02d7bf83fe12d306ecd"
 
 permissions:
   contents: read
+  actions: read # compare_run: download the previously distributed APK of this repository
 
 jobs:
   apk:
@@ -68,11 +82,72 @@ jobs:
           $ANDROID_HOME/build-tools/37.0.0/apksigner verify --print-certs out/*.apk | head -5
           $ANDROID_HOME/build-tools/37.0.0/aapt2 dump badging out/*.apk | grep -E "^package|sdkVersion|targetSdk" || true
           ls -l out/*.apk; sha256sum out/*.apk
+      - name: Update compatibility (package, versionCode, signing certificate)
+        env:
+          EXPECTED_CERT: ${{ inputs.expected_cert_sha256 }}
+          MIN_VC: ${{ inputs.min_version_code }}
+          COMPARE_RUN: ${{ inputs.compare_run }}
+        run: |
+          set -euo pipefail
+          bt=$ANDROID_HOME/build-tools/37.0.0
+          info() { # info <apk>: "<package> <versionCode> <cert sha256>"
+            local b c # whole outputs first: a pipe into head/grep -m1 can SIGPIPE the producer under pipefail
+            b=$("$bt/aapt2" dump badging "$1"); b=${b%%$'\n'*}
+            c=$("$bt/apksigner" verify --print-certs "$1"); c=$(grep -oE 'certificate SHA-256 digest: [0-9a-f]{64}' <<<"$c" | head -n1 | awk '{print $NF}')
+            echo "$(sed -E "s/^package: name='([^']+)'.*/\1/" <<<"$b") $(sed -E "s/.* versionCode='([0-9]+)'.*/\1/" <<<"$b") $c"
+          }
+          read -r pkg vc cert <<<"$(info out/hermes-local-*-arm64-v8a.apk)"
+          echo "new build: package=$pkg versionCode=$vc cert=$cert"
+          fail=0
+          [ "$pkg" = dev.syed.hermeslocal ] || { echo "::error::package $pkg is not dev.syed.hermeslocal"; fail=1; }
+          [ "$vc" -gt "$MIN_VC" ] || { echo "::error::versionCode $vc is not above $MIN_VC (Android refuses a downgrade)"; fail=1; }
+          [ "$cert" = "$EXPECTED_CERT" ] || { echo "::error::signing certificate $cert is not $EXPECTED_CERT"; fail=1; }
+          if [ -n "$COMPARE_RUN" ]; then
+            mkdir -p prev
+            gh run download "$COMPARE_RUN" --repo "$GITHUB_REPOSITORY" -n hermes-local-1.0.0-arm64-v8a -D prev
+            read -r ppkg pvc pcert <<<"$(info prev/*.apk)"
+            echo "previous build (run $COMPARE_RUN): package=$ppkg versionCode=$pvc cert=$pcert sha256=$(sha256sum prev/*.apk | cut -d' ' -f1)"
+            [ "$ppkg" = "$pkg" ] || { echo "::error::package differs from run $COMPARE_RUN ($ppkg)"; fail=1; }
+            [ "$pcert" = "$cert" ] || { echo "::error::signing certificate differs from run $COMPARE_RUN ($pcert)"; fail=1; }
+            [ "$vc" -gt "$pvc" ] || { echo "::error::versionCode $vc is not above run $COMPARE_RUN's $pvc"; fail=1; }
+          fi
+          [ "$fail" = 0 ] && echo "UPDATE_COMPATIBLE package=$pkg versionCode=$vc (> $MIN_VC) cert=$cert"
+          exit "$fail"
       - uses: actions/upload-artifact@v4
         with:
           name: hermes-local-${{ inputs.version_name }}-arm64-v8a
           path: out/*.apk
           compression-level: 0
+
+  unit:
+    # JVM unit tests (Robolectric): auto-wake detection and debounce, engine start/stop decisions, storage, sign-in
+    # parsing, screen previews (screenshots uploaded as evidence).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: android-actions/setup-android@v3
+        with: { packages: "platforms;android-37.0 build-tools;37.0.0 platform-tools" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "9.8.2" }
+      - run: sudo apt-get install -y --no-install-recommends patchelf
+      - name: Native libraries (proot) for the unit-test build
+        run: bash scripts/fetch-proot.sh
+      - name: Unit tests
+        working-directory: android
+        env:
+          SHOTS_DIR: ${{ github.workspace }}/shots
+        run: gradle --no-daemon -PversionCode=${{ github.run_number }} :app:testDebugUnitTest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: |
+            android/app/build/reports/tests/
+            android/app/build/test-results/
+            shots/
 
   emulator:
     if: ${{ inputs.emulator }}
