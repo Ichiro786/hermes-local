@@ -306,13 +306,16 @@ if [ "$ok" = 1 ]; then
   if ! grep -qx "HL_RUNTIME_OK browser" "$OUT/runtime-browser.txt"; then
     guest 'B=$(/opt/hermes-local/bin/hermes-py -I -c "import sys; sys.path.insert(0, \"/opt/hermes/hermes-agent\"); import hermes_bootstrap; from hermes_cli.browser_runtime import chromium_executable; print(chromium_executable(allow_override=False))")
 echo "BROWSER_DIAG chromium=$B nproc=$(nproc) mem=$(free -m | awk "/Mem/{print \$2\" MiB, avail \"\$7}")"
-for flags in "" "--no-zygote" "--no-zygote --disable-gpu" "--no-zygote --disable-gpu --single-process" "--no-zygote --disable-gpu --disable-crash-reporter --disable-breakpad"; do
+for flags in "" "--no-zygote --disable-gpu --single-process"; do
   d=$(mktemp -d /tmp/hl-chrome.XXXXXX); t0=$(date +%s)
   "$B" --headless=new --no-sandbox --disable-dev-shm-usage --remote-debugging-port=0 --user-data-dir="$d" --no-first-run $flags --enable-logging=stderr --v=0 about:blank >"$d.log" 2>&1 &
   pid=$!; ok=0
   for _ in $(seq 1 150); do [ -s "$d/DevToolsActivePort" ] && { ok=1; break; }; kill -0 $pid 2>/dev/null || break; sleep 1; done
   echo "BROWSER_DIAG flags=[$flags] devtools=$ok after $(( $(date +%s) - t0 ))s alive=$(kill -0 $pid 2>/dev/null && echo 1 || echo 0) procs=$(pgrep -c -f "user-data-dir=$d")"
-  tail -n 12 "$d.log" | cut -c1-300 | sed "s/^/BROWSER_DIAG   /"
+  grep -m3 -iE "DevTools listening|Cannot start http server|devtools_http|bind\(|EACCES|Operation not permitted" "$d.log" | cut -c1-300 | sed "s/^/BROWSER_DIAG   key: /"
+  echo "BROWSER_DIAG   files: $(ls "$d" 2>/dev/null | tr "\n" " ")"
+  head -n 6 "$d.log" | cut -c1-300 | sed "s/^/BROWSER_DIAG   head: /"
+  tail -n 6 "$d.log" | cut -c1-300 | sed "s/^/BROWSER_DIAG   tail: /"
   pkill -TERM -f "user-data-dir=$d" 2>/dev/null; sleep 2; pkill -KILL -f "user-data-dir=$d" 2>/dev/null; rm -rf "$d" "$d.log"
   [ $ok = 1 ] && break
 done' 900 | tee "$OUT/browser-diag.txt"
