@@ -140,6 +140,22 @@ jobs:
         env:
           SHOTS_DIR: ${{ github.workspace }}/shots
         run: gradle --no-daemon -PversionCode=${{ github.run_number }} :app:testDebugUnitTest
+      - name: Unit test summary
+        if: always()
+        run: |
+          python3 - <<'PY2'
+          import glob, xml.etree.ElementTree as ET
+          tot = [0, 0, 0, 0]
+          for f in sorted(glob.glob("android/app/build/test-results/testDebugUnitTest/*.xml")):
+              s = ET.parse(f).getroot()
+              n, fl, er, sk = (int(s.get(k, 0)) for k in ("tests", "failures", "errors", "skipped"))
+              tot = [a + b for a, b in zip(tot, (n, fl, er, sk))]
+              print(f"UNIT {s.get('name')}: {n} tests, {fl} failed, {er} errors, {sk} skipped")
+              for c in s.iter("testcase"):
+                  bad = c.find("failure") if c.find("failure") is not None else c.find("error")
+                  if bad is not None: print(f"  FAIL {c.get('name')}: {(bad.get('message') or '')[:300]}")
+          print(f"UNIT TOTAL: {tot[0]} tests, {tot[1]} failed, {tot[2]} errors, {tot[3]} skipped")
+          PY2
       - uses: actions/upload-artifact@v4
         if: always()
         with:
