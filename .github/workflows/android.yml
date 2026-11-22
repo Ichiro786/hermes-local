@@ -16,15 +16,18 @@ on:
     inputs:
       engine_tag:
         description: "Engine release the app downloads"
-        default: "engine-v0.23.2-4"
+        default: "engine-v0.23.3-1"
       version_name:
         default: "1.1.0"
       emulator:
         type: boolean
         default: true
       upgrade_from:
-        description: "App tag for the upgrade test (empty = skip)"
-        default: "v1.0.0-test4"
+        description: "App tag or commit for the upgrade test (empty = skip); c2260af = the distributed 1.0.0 (17)"
+        default: "c2260af"
+      upgrade_from_engine:
+        description: "Engine the old app downloads, for old apps without a bundled engine (test5 and later)"
+        default: "engine-v0.23.2-4"
       min_version_code:
         description: "versionCode of the newest distributed build; this build must be higher"
         default: "20"
@@ -197,11 +200,18 @@ jobs:
         if: ${{ inputs.upgrade_from != '' }}
         run: |
           git worktree add old "${{ inputs.upgrade_from }}"
-          eng=$(grep -oE 'engine-v[0-9.]+-[0-9]+' old/scripts/build-apk.sh | head -n1); echo "old engine: $eng"
-          mkdir -p engine-old
-          gh release download "$eng" --repo "$GITHUB_REPOSITORY" -D engine-old -p 'rootfs-x86_64.tar.xz*'
-          cd old && ENGINE_DIR=../engine-old ENGINE_TAG="$eng" ABI=x86_64 GRADLE=gradle GRADLE_ARGS=-PciHooks=true VERSION_CODE=1 bash scripts/build-apk.sh
-          ls -l out/; rm -rf ../engine-old android/app/build
+          if grep -q ENGINE_SHA256 old/scripts/build-apk.sh; then
+            # test5 and later: no bundled engine, the old app downloads its engine release on first run.
+            eng="${{ inputs.upgrade_from_engine }}"; echo "old app downloads $eng"
+            cd old && ENGINE_TAG="$eng" ABI=x86_64 GRADLE=gradle GRADLE_ARGS=-PciHooks=true VERSION_CODE=1 bash scripts/build-apk.sh
+          else
+            eng=$(grep -oE 'engine-v[0-9.]+-[0-9]+' old/scripts/build-apk.sh | head -n1); echo "old engine (bundled): $eng"
+            mkdir -p engine-old
+            gh release download "$eng" --repo "$GITHUB_REPOSITORY" -D engine-old -p 'rootfs-x86_64.tar.xz*'
+            cd old && ENGINE_DIR=../engine-old ENGINE_TAG="$eng" ABI=x86_64 GRADLE=gradle GRADLE_ARGS=-PciHooks=true VERSION_CODE=1 bash scripts/build-apk.sh
+            rm -rf ../engine-old
+          fi
+          ls -l out/; rm -rf android/app/build
       - name: Build x86_64 CI APK (debug key, CI hooks)
         env:
           ENGINE_TAG: ${{ inputs.engine_tag }}

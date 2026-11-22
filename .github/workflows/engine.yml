@@ -9,10 +9,10 @@ on:
     inputs:
       hermes_ref:
         description: "Hermes Agent release tag (stable)"
-        default: "v0.23.2"
+        default: "v0.23.3"
       revision:
         description: "Payload revision (engine-<ref>-<revision>)"
-        default: "2"
+        default: "1"
       archs:
         description: "Architectures (json list)"
         default: '["arm64","x86_64"]'

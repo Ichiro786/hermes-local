@@ -12,7 +12,7 @@
 set -uo pipefail
 APK=$1; OUT=${2:-e2e}; OLD_APK=${3:-}
 PKG=dev.syed.hermeslocal
-ENGINE_TAG=${ENGINE_TAG:-engine-v0.23.2-4}
+ENGINE_TAG=${ENGINE_TAG:-engine-v0.23.3-1}
 mkdir -p "$OUT"
 adb wait-for-device
 # Root shell (google_apis image) for reading app files: the CI APK is a release build, so run-as refuses it
@@ -489,11 +489,11 @@ appsh "cat files/engine/logs/engine.log" >"$OUT/engine-fresh.log" 2>/dev/null ||
 adb shell dumpsys gfxinfo $PKG >"$OUT/gfxinfo.txt" 2>/dev/null || true
 grep -E "Janky frames|Total frames|90th|99th" "$OUT/gfxinfo.txt" | tee -a "$OUT/checks.txt" || true
 
-# ======================= B. upgrade from test4 =======================
+# ======================= B. upgrade from old build =======================
 if [ -n "$OLD_APK" ]; then
-  echo "===== B. upgrade test4 -> test5"
+  echo "===== B. upgrade old build -> new build"
   adb uninstall $PKG >/dev/null
-  adb install -r -g "$OLD_APK" || check "install the test4 APK" 0
+  adb install -r -g "$OLD_APK" || check "install the old build APK" 0
   adb shell dumpsys deviceidle whitelist +$PKG >/dev/null 2>&1 || true
   adb logcat -c
   adb shell am start -n $PKG/.MainActivity
@@ -506,16 +506,16 @@ if [ -n "$OLD_APK" ]; then
     '/opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_provider.py ensure openai-codex 2>&1 | tail -n 1' \
     'echo upgrade-marker >/root/my-notes.txt; mkdir -p /root/.hermes/memories && echo remember-me >/root/.hermes/memories/e2e-marker.md')" 240 | tee "$OUT/upgrade-setup.txt"
   adb shell am start -n $PKG/.MainActivity --ez ci_toggle true
-  port_open 200 >/dev/null; guest "$CHATPY" 240 | grep -E "CHAT_" | cut -c1-200 | tee "$OUT/upgrade-chat-test4.txt"
+  port_open 200 >/dev/null; guest "$CHATPY" 240 | grep -E "CHAT_" | cut -c1-200 | tee "$OUT/upgrade-chat-old.txt"
   guest "$SESSIONS
 /bin/bash /opt/hermes-local/bin/hermes-local-auth status; cat /root/.hermes/installs/*/facts.json | grep environment; cat /opt/hermes-local/engine-version | head -3" 120 | tee "$OUT/upgrade-before.txt"
   old_env=$(grep -o 'environments/[0-9a-f]*' "$OUT/upgrade-before.txt" | head -n1)
-  old_kb=$(kb); note "test4: data $((old_kb / 1024)) MiB, env $old_env, $(grep SESSIONS "$OUT/upgrade-before.txt")"
-  check "test4 baseline: chat session created with the stub sign-in" "$(grep -q '^CHAT_OK' "$OUT/upgrade-chat-test4.txt" && echo 1 || echo 0)"
+  old_kb=$(kb); note "old build: data $((old_kb / 1024)) MiB, env $old_env, $(grep SESSIONS "$OUT/upgrade-before.txt")"
+  check "old build baseline: chat session created with the stub sign-in" "$(grep -q '^CHAT_OK' "$OUT/upgrade-chat-old.txt" && echo 1 || echo 0)"
   adb shell am start -n $PKG/.MainActivity --ez ci_toggle false; port_closed
-  snap 40-test4-before-upgrade
-  echo "== install test5 over test4"
-  adb install -r -g "$APK" || check "upgrade install of the test5 APK" 0
+  snap 40-old build-before-upgrade
+  echo "== install new build over old build"
+  adb install -r -g "$APK" || check "upgrade install of the new build APK" 0
   adb logcat -c
   t1=$(date +%s)
   adb shell am start -n $PKG/.MainActivity
@@ -529,18 +529,18 @@ if [ -n "$OLD_APK" ]; then
 /bin/bash /opt/hermes-local/bin/hermes-local-auth status; /bin/bash /opt/hermes-local/bin/hermes-local-passwd --check && echo PASSWORD_OK; cat /root/my-notes.txt /root/.hermes/memories/e2e-marker.md; ls /root/.hermes/installs/*/environments; cat /root/.hermes/installs/*/facts.json | grep environment; ls -d /root/.local/share/uv 2>&1" 180 | tee "$OUT/upgrade-after.txt"
   check "upgrade: password kept" "$(grep -q PASSWORD_OK "$OUT/upgrade-after.txt" && echo 1 || echo 0)"
   check "upgrade: Codex login kept (auth status codex 1, e2e-upgrade)" "$(grep -q '"codex": 1' "$OUT/upgrade-after.txt" && grep -q 'e2e-upgrade' "$OUT/upgrade-after.txt" && echo 1 || echo 0)"
-  check "upgrade: sessions kept (same counts as on test4)" "$(b=$(grep SESSIONS "$OUT/upgrade-before.txt"); a=$(grep SESSIONS "$OUT/upgrade-after.txt"); [ -n "$b" ] && [ "$b" = "$a" ] && ! grep -q 'sessions=0' <<<"$b" && echo 1 || echo 0)"
+  check "upgrade: sessions kept (same counts as on old build)" "$(b=$(grep SESSIONS "$OUT/upgrade-before.txt"); a=$(grep SESSIONS "$OUT/upgrade-after.txt"); [ -n "$b" ] && [ "$b" = "$a" ] && ! grep -q 'sessions=0' <<<"$b" && echo 1 || echo 0)"
   check "upgrade: user files and memories kept" "$(grep -qx upgrade-marker "$OUT/upgrade-after.txt" && grep -qx remember-me "$OUT/upgrade-after.txt" && echo 1 || echo 0)"
   new_env=$(grep -o 'environments/[0-9a-f]*' "$OUT/upgrade-after.txt" | tail -n1)
-  check "upgrade: no old environment (test4's $old_env gone, one generation, no uv CPython)" "$([ -n "$new_env" ] && [ "$new_env" != "$old_env" ] && \
+  check "upgrade: no old environment (the old build's $old_env gone, one generation, no uv CPython)" "$([ -n "$new_env" ] && [ "$new_env" != "$old_env" ] && \
     [ "$(grep -cE '^[0-9a-f]{32}$' "$OUT/upgrade-after.txt")" = 1 ] && grep -q 'No such file' "$OUT/upgrade-after.txt" && echo 1 || echo 0)"
   check "upgrade: no leftovers (no r.partial, downloads/ empty)" "$(! appsh 'ls files/r.partial' >/dev/null 2>&1 && [ -z "$(appsh 'ls files/engine/downloads' 2>/dev/null | tr -d '\r')" ] && echo 1 || echo 0)"
-  up_kb=$(kb); note "upgrade: data $((old_kb / 1024)) MiB on test4 -> $((up_kb / 1024)) MiB on test5"
+  up_kb=$(kb); note "upgrade: data $((old_kb / 1024)) MiB on old build -> $((up_kb / 1024)) MiB on new build"
   adb shell am start -n $PKG/.MainActivity --ez ci_toggle true
   port_open 200 && login_check "$OUT/dashboard-after-upgrade.txt" >/dev/null; r=$?
   check "upgrade: dashboard login with the old password" "$([ $r = 0 ] && echo 1 || echo 0)"
-  guest "$CHATPY" 240 | grep -E "CHAT_" | cut -c1-200 | tee "$OUT/upgrade-chat-test5.txt"
-  check "upgrade: chat still works on the carried sign-in + model setting (new dependency env)" "$(grep -q '^CHAT_OK' "$OUT/upgrade-chat-test5.txt" && echo 1 || echo 0)"
+  guest "$CHATPY" 240 | grep -E "CHAT_" | cut -c1-200 | tee "$OUT/upgrade-chat-new.txt"
+  check "upgrade: chat still works on the carried sign-in + model setting (new dependency env)" "$(grep -q '^CHAT_OK' "$OUT/upgrade-chat-new.txt" && echo 1 || echo 0)"
   snap 43-upgraded-running
   adb shell am start -n $PKG/.MainActivity --ez ci_toggle false; port_closed
   appsh "cat files/engine/logs/engine.log" >"$OUT/engine-upgrade.log" 2>/dev/null || true
