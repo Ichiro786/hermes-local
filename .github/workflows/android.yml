@@ -256,6 +256,7 @@ jobs:
           [ "$TAG" = "v$VERSION" ] || { echo "::error::tag $TAG does not match version_name $VERSION"; exit 1; }
           notes="android/release-notes/$TAG.md"
           [ -f "$notes" ] || { echo "::error::$notes missing"; exit 1; }
+          ! grep -q PLACEHOLDER "$notes" || { echo "::error::$notes still has a placeholder"; exit 1; }
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo "::error::release $TAG exists already"; exit 1; fi
           ls out/*.apk >/dev/null
           [ "$(ls out/*.apk | wc -l)" = 1 ] || { echo "::error::expected one APK"; ls -l out; exit 1; }
