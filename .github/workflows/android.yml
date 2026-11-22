@@ -18,7 +18,7 @@ on:
         description: "Engine release the app downloads"
         default: "engine-v0.23.2-4"
       version_name:
-        default: "1.0.0"
+        default: "1.1.0"
       emulator:
         type: boolean
         default: true
@@ -26,14 +26,17 @@ on:
         description: "App tag for the upgrade test (empty = skip)"
         default: "v1.0.0-test4"
       min_version_code:
-        description: "versionCode of the installed build; this build must be higher"
-        default: "17"
+        description: "versionCode of the newest distributed build; this build must be higher"
+        default: "20"
       compare_run:
         description: "Workflow run whose arm64 APK is the installed build (signature + package check; empty = skip)"
         default: "44606647149"
       expected_cert_sha256:
         description: "SHA-256 of the release signing certificate (published with v1.0.0-test1/test2)"
         default: "6b4eea786e5d6f126828ab2d650295d85a89bfab4189b02d7bf83fe12d306ecd"
+      release_tag:
+        description: "Publish a GitHub Release with this tag (e.g. v1.1.0; main only, needs android/release-notes/<tag>.md). Empty = no release"
+        default: ""
 
 permissions:
   contents: read
@@ -43,6 +46,9 @@ jobs:
   apk:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    outputs:
+      version_code: ${{ steps.compat.outputs.version_code }}
+      cert: ${{ steps.compat.outputs.cert }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -83,6 +89,7 @@ jobs:
           $ANDROID_HOME/build-tools/37.0.0/aapt2 dump badging out/*.apk | grep -E "^package|sdkVersion|targetSdk" || true
           ls -l out/*.apk; sha256sum out/*.apk
       - name: Update compatibility (package, versionCode, signing certificate)
+        id: compat
         env:
           EXPECTED_CERT: ${{ inputs.expected_cert_sha256 }}
           MIN_VC: ${{ inputs.min_version_code }}
@@ -112,6 +119,7 @@ jobs:
             [ "$vc" -gt "$pvc" ] || { echo "::error::versionCode $vc is not above run $COMPARE_RUN's $pvc"; fail=1; }
           fi
           [ "$fail" = 0 ] && echo "UPDATE_COMPATIBLE package=$pkg versionCode=$vc (> $MIN_VC) cert=$cert"
+          { echo "version_code=$vc"; echo "cert=$cert"; } >>"$GITHUB_OUTPUT"
           exit "$fail"
       - uses: actions/upload-artifact@v4
         with:
@@ -218,3 +226,62 @@ jobs:
         with:
           name: emulator-evidence
           path: e2e/
+
+  release:
+    # Publishes the signed arm64 APK as a GitHub Release, only from main and only when the build, the update
+    # compatibility check, the unit tests and (when it ran) the emulator e2e all passed.
+    needs: [apk, unit, emulator]
+    if: ${{ always() && inputs.release_tag != '' && needs.apk.result == 'success' && needs.unit.result == 'success' && (needs.emulator.result == 'success' || (needs.emulator.result == 'skipped' && !inputs.emulator)) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.release_tag }}
+      VERSION: ${{ inputs.version_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: android/release-notes }
+      - uses: actions/download-artifact@v4
+        with: { name: "hermes-local-${{ inputs.version_name }}-arm64-v8a", path: out }
+      - name: Publish release
+        env:
+          ENGINE_TAG: ${{ inputs.engine_tag }}
+          VERSION_CODE: ${{ needs.apk.outputs.version_code }}
+          CERT: ${{ needs.apk.outputs.cert }}
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::releases are published from main only ($GITHUB_REF)"; exit 1; }
+          [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::release tag $TAG is not vX.Y.Z"; exit 1; }
+          [ "$TAG" = "v$VERSION" ] || { echo "::error::tag $TAG does not match version_name $VERSION"; exit 1; }
+          notes="android/release-notes/$TAG.md"
+          [ -f "$notes" ] || { echo "::error::$notes missing"; exit 1; }
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo "::error::release $TAG exists already"; exit 1; fi
+          ls out/*.apk >/dev/null
+          [ "$(ls out/*.apk | wc -l)" = 1 ] || { echo "::error::expected one APK"; ls -l out; exit 1; }
+          apk=$(basename out/*.apk)
+          (cd out && sha256sum "$apk" >"$apk.sha256")
+          {
+            cat "$notes"
+            echo
+            echo "## Download"
+            echo
+            echo "- \`$apk\` (arm64-v8a, signed): sha256 \`$(cut -d' ' -f1 "out/$apk.sha256")\`"
+            echo "- Version $VERSION (versionCode $VERSION_CODE), package \`dev.syed.hermeslocal\`"
+            echo "- Signing certificate SHA-256 \`$CERT\` (the same key as every earlier Hermes Local build)"
+            echo "- Engine: [\`$ENGINE_TAG\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$ENGINE_TAG), downloaded by the app on first launch"
+            echo
+            echo "Built and verified by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >notes.md
+          gh release create "$TAG" "out/$apk" "out/$apk.sha256" --target "$GITHUB_SHA" --title "Hermes Local $VERSION" \
+            --notes-file notes.md --latest --repo "$GITHUB_REPOSITORY"
+      - name: Public download check (no token)
+        run: |
+          set -euo pipefail
+          apk=$(basename out/*.apk)
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$apk"
+          got=$(env -u GH_TOKEN curl -fsSL --retry 5 "$url" | sha256sum | cut -d' ' -f1)
+          want=$(cut -d' ' -f1 "out/$apk.sha256")
+          echo "$url: sha256 $got (built $want)"
+          [ "$got" = "$want" ] || { echo "::error::public APK download does not match the built APK"; exit 1; }
+          echo "PUBLIC_DOWNLOAD_OK $url"
