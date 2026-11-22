@@ -306,6 +306,52 @@ echo "voice size (installed): edge-tts +$(( (size_edge - size_before) / 1048576 
 du -sh "$ROOTFS/opt/hermes-local/live-libs" || true
 endstep
 
+step "Browser: DevTools endpoint from Chromium's log when it cannot write DevToolsActivePort"
+# Under proot on Android, Chromium's DevTools server starts ("DevTools listening on ws://127.0.0.1:<port>/
+# devtools/browser/<id>" on stderr) but writing <user-data-dir>/DevToolsActivePort fails with ENOSYS, so Hermes'
+# launcher, which only reads that file, gave up after its launch timeout ("Chromium did not expose a DevTools
+# endpoint in time"; e2e runs 17-20). The launcher sends Chromium's output to a per-launch log it opens fresh
+# ("wb"), so the line there names this launch. Patch: the file first (unchanged everywhere it works), else that
+# line. Fails the build if the upstream function moved.
+python3 - "$ROOTFS/opt/hermes/hermes-agent/tools/browser_launcher.py" <<'PY2'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+old = "def _read_devtools_file(user_data_dir: str) -> Optional[tuple[int, str]]:\n"
+assert s.count(old) == 1, "_read_devtools_file not found"
+assert '_LAUNCH_LOG = "hermes-chromium.log"' in s, "_LAUNCH_LOG changed"
+s = s.replace(old, "def _hl_read_devtools_port_file(user_data_dir: str) -> Optional[tuple[int, str]]:\n")
+s += '''
+
+
+# hermes-local: Chromium under proot on Android cannot write DevToolsActivePort (ENOSYS) but prints the endpoint.
+_HL_DEVTOOLS_LINE = None
+
+
+def _read_devtools_file(user_data_dir: str) -> Optional[tuple[int, str]]:
+    """``(port, "/devtools/browser/<id>")`` from DevToolsActivePort, else from this launch's Chromium log."""
+    global _HL_DEVTOOLS_LINE
+    found = _hl_read_devtools_port_file(user_data_dir)
+    if found:
+        return found
+    try:
+        with open(os.path.join(user_data_dir, _LAUNCH_LOG), "rb") as fh:
+            raw = fh.read(4 * 1024 * 1024)
+    except OSError:
+        return None
+    if _HL_DEVTOOLS_LINE is None:
+        import re as _re
+        _HL_DEVTOOLS_LINE = _re.compile(rb"DevTools listening on ws://(?:127\\.0\\.0\\.1|localhost|\\[::1\\]):(\\d+)(/devtools/browser/[0-9A-Za-z-]+)")
+    last = None
+    for last in _HL_DEVTOOLS_LINE.finditer(raw):
+        pass
+    if last is None:
+        return None
+    return int(last.group(1)), last.group(2).decode("ascii")
+'''
+p.write_text(s); print("patched browser_launcher: DevTools endpoint fallback from the Chromium log")
+PY2
+endstep
+
 step "No self-update on the phone"
 # The engine is replaced as a whole by the app (engine-<ref>-<rev> releases). Hermes must never
 # update itself or finish a "source update" at launch inside proot: on v1.0.0-test1 every launch
