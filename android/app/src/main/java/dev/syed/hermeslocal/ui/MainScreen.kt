@@ -36,6 +36,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.AutoMode
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Key
@@ -60,6 +61,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -158,7 +160,13 @@ fun MainScreen(status: EngineStatus, settings: SettingsSnapshot, onNavigate: (Sc
             Text(it, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
         }
         Spacer(Modifier.height(16.dp))
-        DashboardCard(status, onOpenHermes = { AppController.openHermes(ctx) }, onOpenDashboard = { AppController.openUrl(ctx, status.localUrl) })
+        val wakeConnected by dev.syed.hermeslocal.wake.AutoWake.connected.collectAsStateWithLifecycle()
+        val autoWake = when {
+            !settings.autoWake || !canRun -> null
+            wakeConnected -> true
+            else -> false
+        }
+        DashboardCard(status, autoWake, onOpenHermes = { AppController.openHermes(ctx) }, onOpenDashboard = { AppController.openUrl(ctx, status.localUrl) })
         Spacer(Modifier.height(12.dp))
     }
 }
@@ -193,7 +201,7 @@ private fun StatusLine(status: EngineStatus) {
 }
 
 @Composable
-private fun DashboardCard(status: EngineStatus, onOpenHermes: () -> Unit, onOpenDashboard: () -> Unit) {
+private fun DashboardCard(status: EngineStatus, autoWake: Boolean?, onOpenHermes: () -> Unit, onOpenDashboard: () -> Unit) {
     val running = status.phase == Phase.Running
     val container by animateColorAsState(if (running) MaterialTheme.status.onCard else MaterialTheme.colorScheme.surfaceContainer, tween(450), label = "card")
     Card(
@@ -229,6 +237,9 @@ private fun DashboardCard(status: EngineStatus, onOpenHermes: () -> Unit, onOpen
             val chips = buildList {
                 if (status.thermal >= 1) add(Triple(Icons.Rounded.Thermostat, thermalLabel(status.thermal), if (status.thermal >= 2) MaterialTheme.status.busy else null))
                 if (running) add(Triple(if (status.awake != null) Icons.Rounded.Bolt else Icons.Rounded.Bedtime, status.awake ?: "CPU may sleep", null))
+                // null: auto-wake off; false: on but Android has not bound the service (Settings explains why).
+                if (autoWake == true) add(Triple(Icons.Rounded.AutoMode, "Auto-wake with Hermes", null))
+                if (autoWake == false) add(Triple(Icons.Rounded.AutoMode, "Auto-wake needs access", MaterialTheme.status.busy))
             }
             if (chips.isNotEmpty()) FlowRow(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 chips.forEach { (icon, text, tint) -> Chip(icon, text, tint) }

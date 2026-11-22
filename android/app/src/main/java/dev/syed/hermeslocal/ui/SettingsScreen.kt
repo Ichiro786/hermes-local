@@ -105,6 +105,8 @@ fun SettingsScreen(status: EngineStatus, settings: SettingsSnapshot, onBack: () 
             NavRow(Icons.Rounded.ViewInAr, "Model providers", "Codex and Antigravity sign-in · voice keys", enabled = installed) { onNavigate(Screen.Providers) }
         }
 
+        AutoWakeSection(settings)
+
         SectionChip(Icons.Rounded.Bolt, "Power")
         Group {
             SwitchRow(Icons.Rounded.PowerSettingsNew, "Start on boot", "Turn Hermes on when the phone starts", settings.startOnBoot) { v -> s.update { copy(startOnBoot = v) } }

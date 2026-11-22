@@ -57,6 +57,20 @@
                 android:value="Runs the user's own Hermes Agent server (a Linux userland under proot) that Hermes client apps on this phone connect to over localhost." />
         </service>
 
+        <!-- Auto-wake with official Hermes (opt-in): notices only the official Hermes app coming to the front. -->
+        <service
+            android:name=".wake.AutoWakeService"
+            android:exported="true"
+            android:label="@string/auto_wake_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/auto_wake_service" />
+        </service>
+
         <receiver
             android:name=".engine.BootReceiver"
             android:exported="true">

@@ -56,14 +56,27 @@ class Storage(context: Context) {
             Part("Leftovers", leftovers, "interrupted install or download"),
         )
         val total = NativeFs.du(app.filesDir) + NativeFs.du(app.cacheDir)
-        return Report(total, parts, cleanTargets().sumOf { NativeFs.du(it) })
+        val targets = cleanTargets()
+        // proot link-store files only the generations about to go refer to are freed by Clean up as well.
+        val orphans = L2sGc.find(paths.rootfs, l2sDir, targets)?.orphans.orEmpty()
+        return Report(total, parts, targets.sumOf { NativeFs.du(it) } + orphans.sumOf { NativeFs.du(it) })
     }
+
+    private val l2sDir get() = File(paths.rootfs, ".l2s")
 
     /** Deletes [cleanTargets]; the engine must be stopped (Hermes may be using a cache or an environment). */
     fun cleanUp(): Long {
         val targets = cleanTargets()
-        val freed = targets.sumOf { NativeFs.du(it) }
+        var freed = targets.sumOf { NativeFs.du(it) }
         targets.forEach { NativeFs.deleteTree(it) }
+        // Deleting generations from here (outside proot) leaves their faked hard links' files in proot's l2s
+        // store; drop the chains nothing refers to any more ([L2sGc], skipped entirely when unsure).
+        val gc = L2sGc.find(paths.rootfs, l2sDir)
+        if (gc != null) {
+            freed += gc.orphans.sumOf { NativeFs.du(it) }
+            val n = L2sGc.delete(gc.orphans)
+            android.util.Log.i("HermesLocal", "clean up: l2s ${gc.orphanChains} orphaned chain(s), $n file(s) removed, ${gc.keptChains} chain(s) in use")
+        } else android.util.Log.w("HermesLocal", "clean up: l2s store left as is (could not tell what is in use)")
         return freed
     }
 

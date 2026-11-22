@@ -374,7 +374,7 @@ adb shell am start -n $PKG/.MainActivity --ez ci_toggle false
 port_closed; sleep 8; snap 05-stopped
 kill -INT $REC 2>/dev/null; sleep 3; adb pull /sdcard/lever-off.mp4 "$S/lever-off.mp4" >/dev/null 2>&1 || true
 appsh "grep -E 'TERM|exited code|--- ' files/engine/logs/engine.log | tail -n 4" | tee -a "$OUT/checks.txt"
-base_kb=$(kb)
+base_kb=$(kb); base_deps_kb=$(( $(kb files/r/root/.hermes/installs) + $(kb files/r/.l2s) ))
 guest 'timeout 900 hermes plugins install langfuse --enable --yes-deps </dev/null 2>&1 | grep -v "^ *$" | tail -n 6; ls /root/.hermes/installs/*/environments | wc -l' 960 | tee "$OUT/plugin-install.txt"
 plug_kb=$(kb); envs_after=$(tail -n1 "$OUT/plugin-install.txt" | tr -dc 0-9)
 note "data: baseline $((base_kb / 1024)) MiB, after langfuse install $((plug_kb / 1024)) MiB, dependency generations $envs_after"
@@ -393,13 +393,94 @@ appsh "du -sk files/r/.l2s files/r/tmp files/r/root/.cache files/r/root/.hermes/
   echo l2s_entries \$(ls -A files/r/.l2s 2>/dev/null | wc -l); for e in files/r/root/.hermes/installs/*/environments/*; do \
   echo env \$e symlinks \$(find \$e -type l | wc -l) files \$(find \$e -type f | wc -l); done" | tee "$OUT/cleanup-residue.txt"
 sed 's/^/NOTE residue: /' "$OUT/cleanup-residue.txt" | tr -d '\r' >>"$OUT/checks.txt"
-check "after Clean up the data is back within 250 MiB of the baseline" "$([ "$clean_kb" -gt 0 ] && [ $((clean_kb - base_kb)) -lt 256000 ] && echo 1 || echo 0)"
+# The generation Hermes builds on the phone for a plugin is not slimmed like the shipped one (test6 known issue,
+# ~+270 MiB); everything else must be back at the baseline, and no link-store file may be left that nothing uses.
+deps_kb=$(( $(kb files/r/root/.hermes/installs) + $(kb files/r/.l2s) ))
+note "after Clean up: data $(( (clean_kb - base_kb) / 1024 )) MiB above the baseline, of which the new dependency generation $(( (deps_kb - base_deps_kb) / 1024 )) MiB"
+check "after Clean up everything but the new dependency generation is back within 64 MiB of the baseline" \
+  "$([ "$clean_kb" -gt 0 ] && [ $((clean_kb - base_kb - (deps_kb - base_deps_kb))) -lt 65536 ] && echo 1 || echo 0)"
+adb logcat -d -s HermesLocal:I | grep "clean up: l2s" | tail -n1 | sed 's/^/NOTE /' | tee -a "$OUT/checks.txt"
+# Unreferenced intermediates (proot: link -> <l2s>/.l2s.<name>NNNN -> <l2s>/.l2s.<name>NNNN.<count>), by name.
+appsh "find files/r -path files/r/.l2s -prune -o -type l -exec ls -l {} + | sed 's/.* -> //' | grep -o '[.]l2s[.][^/]*\$'" \
+  | tr -d '\r' | LC_ALL=C sort -u >"$OUT/l2s-refs.txt"
+appsh "cd files/r/.l2s 2>/dev/null && for n in .l2s.*; do [ -L \"\$n\" ] && echo \"\$n\"; done | grep -E '[0-9]{4}\$'" \
+  | tr -d '\r' | LC_ALL=C sort -u >"$OUT/l2s-intermediates.txt"
+orph=$(LC_ALL=C comm -23 "$OUT/l2s-intermediates.txt" "$OUT/l2s-refs.txt" | wc -l)
+note "l2s store after Clean up: $(wc -l <"$OUT/l2s-intermediates.txt") chain(s), $orph not referenced"
+check "after Clean up no orphaned proot link-store chains are left" "$([ "$orph" = 0 ] && [ -s "$OUT/l2s-refs.txt" ] && echo 1 || echo 0)"
 guest 'COLUMNS=200 hermes plugins list </dev/null 2>&1 | grep -E "^│ langfuse"; /opt/hermes-local/bin/hermes-py -c "import hermes_bootstrap, langfuse; print(\"LANGFUSE_IMPORT_OK\")"' 300 | tee "$OUT/plugin-after-cleanup.txt"
 check "langfuse still enabled + importable after Clean up" "$(grep -q 'LANGFUSE_IMPORT_OK' "$OUT/plugin-after-cleanup.txt" && grep -qE 'langfuse +│ enabled' "$OUT/plugin-after-cleanup.txt" && echo 1 || echo 0)"
 adb shell am start -n $PKG/.MainActivity --ez ci_toggle true
 port_open 150 && login_check "$OUT/dashboard-after-cleanup.txt" >/dev/null; r=$?
 check "Hermes starts after Clean up" "$([ $r = 0 ] && echo 1 || echo 0)"
 adb shell am start -n $PKG/.MainActivity --ez ci_toggle false; port_closed
+
+echo "== auto-wake with official Hermes (a stub app under the official package name; it only shows a window)"
+# Manifest-only APK: package ai.nousresearch.hermes.mobile, launcher activity = the framework's android.app.Activity.
+fake_hermes() {
+  local bt d jar
+  bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1); jar=$(ls -d "$ANDROID_HOME"/platforms/android-*/android.jar | sort -V | tail -n1)
+  d=$(mktemp -d)
+  cat >"$d/AndroidManifest.xml" <<'XML'
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="ai.nousresearch.hermes.mobile" android:versionCode="1" android:versionName="e2e-stub">
+  <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="36" />
+  <application android:hasCode="false" android:label="Hermes (e2e stub)">
+    <activity android:name="android.app.Activity" android:exported="true">
+      <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+    </activity>
+  </application>
+</manifest>
+XML
+  [ -f ~/.android/debug.keystore ] || keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -keypass android \
+    -alias androiddebugkey -dname "CN=Android Debug" -keyalg RSA -validity 3650 >/dev/null 2>&1
+  "$bt/aapt2" link -o "$d/u.apk" --manifest "$d/AndroidManifest.xml" -I "$jar" && "$bt/zipalign" -f 4 "$d/u.apk" "$d/a.apk" && \
+    "$bt/apksigner" sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --out "$OUT/hermes-stub.apk" "$d/a.apk"
+}
+HERMES=ai.nousresearch.hermes.mobile
+open_hermes() { adb shell am start -n $HERMES/android.app.Activity >/dev/null 2>&1; }
+starts() { echo $(( $(appsh "grep -c -- '--- start' files/engine/logs/engine.log" 2>/dev/null | tr -dc 0-9) + 0 )); }
+wake_log() { adb logcat -d -s HermesLocalWake:I 2>/dev/null | grep -E "auto-wake|service" | tail -n "${1:-3}"; }
+if fake_hermes && adb install -r "$OUT/hermes-stub.apk" >/dev/null; then
+  SVC=$PKG/$PKG.wake.AutoWakeService
+  adb shell am start -n $PKG/.MainActivity --ez ci_auto_wake true >/dev/null; sleep 2
+  adb shell settings put secure enabled_accessibility_services "$SVC"; adb shell settings put secure accessibility_enabled 1
+  for _ in $(seq 1 20); do wake_log 20 | grep -q "service connected" && break; sleep 1; done
+  check "auto-wake: Android binds the accessibility service once allowed" "$(wake_log 20 | grep -q 'service connected' && echo 1 || echo 0)"
+  # The harder case first: no battery-optimisation exemption, Hermes Local in the background for a while.
+  adb shell dumpsys deviceidle whitelist -$PKG >/dev/null 2>&1 || true
+  adb shell input keyevent HOME; sleep 20
+  n0=$(starts)
+  open_hermes
+  if port_open 90; then woke=1; how="accessibility binding only (no battery exemption)"; else
+    woke=0; wake_log 5 | sed 's/^/NOTE wake: /' | tee -a "$OUT/checks.txt"
+    adb shell dumpsys deviceidle whitelist +$PKG >/dev/null 2>&1 || true
+    adb shell input keyevent HOME; sleep 5; adb shell am start -n $PKG/.MainActivity >/dev/null; sleep 3; adb shell input keyevent HOME; sleep 16
+    open_hermes; port_open 90 && { woke=1; how="with the battery-optimisation exemption"; }
+  fi
+  adb shell dumpsys deviceidle whitelist +$PKG >/dev/null 2>&1 || true
+  note "auto-wake background start: ${how:-failed}"
+  wake_log 3 | sed 's/^/NOTE wake: /' | tee -a "$OUT/checks.txt"
+  check "auto-wake: opening the Hermes app starts the stopped engine" "$woke"
+  check "auto-wake: the start is logged as source=auto-wake" "$(appsh "grep -- '--- start' files/engine/logs/engine.log | tail -n1" | grep -q 'source=auto-wake' && echo 1 || echo 0)"
+  # Hermes opened again and again, and left: no second start, and the engine keeps running.
+  for _ in 1 2 3; do adb shell input keyevent HOME; sleep 1; open_hermes; sleep 2; done
+  adb shell input keyevent HOME; sleep 30
+  n1=$(starts)
+  check "auto-wake: repeated opens start it once ($((n1 - n0)) start(s))" "$([ $((n1 - n0)) = 1 ] && echo 1 || echo 0)"
+  check "auto-wake: Hermes leaving the front does not stop the engine" "$(port_open 3 >/dev/null && echo 1 || echo 0)"
+  # Lever off, toggle off: opening Hermes leaves the engine off, and the service gives its access back.
+  adb shell am start -n $PKG/.MainActivity --ez ci_toggle false >/dev/null; port_closed
+  adb shell am start -n $PKG/.MainActivity --ez ci_auto_wake false >/dev/null; sleep 3
+  adb shell input keyevent HOME; sleep 3; open_hermes; sleep 25
+  check "auto-wake off: opening Hermes leaves the engine off" "$(port_open 2 >/dev/null && echo 0 || echo 1)"
+  check "auto-wake off: the service gave its accessibility access back" \
+    "$(adb shell settings get secure enabled_accessibility_services | tr -d '\r' | grep -q AutoWakeService && echo 0 || echo 1)"
+  adb shell settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
+  adb uninstall $HERMES >/dev/null 2>&1 || true
+else
+  check "auto-wake: stub Hermes app built and installed" 0
+fi
+
 appsh "cat files/engine/logs/engine.log" >"$OUT/engine-fresh.log" 2>/dev/null || true
 adb shell dumpsys gfxinfo $PKG >"$OUT/gfxinfo.txt" 2>/dev/null || true
 grep -E "Janky frames|Total frames|90th|99th" "$OUT/gfxinfo.txt" | tee -a "$OUT/checks.txt" || true

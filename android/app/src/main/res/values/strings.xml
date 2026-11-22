@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Hermes Local</string>
+    <string name="auto_wake_label">Hermes Local auto-wake</string>
+    <string name="auto_wake_summary">Starts your local Hermes server when you open the official Hermes app</string>
+    <string name="auto_wake_description">Hermes Local only learns that the official Hermes app (ai.nousresearch.hermes.mobile) came to the front, so it can start your local Hermes server if it is off. It does not read what is on your screen, does not see other apps, never types or taps anything, and never stops Hermes. Turn it off in Hermes Local or here at any time.</string>
 </resources>
