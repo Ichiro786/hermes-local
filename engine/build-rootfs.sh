@@ -156,10 +156,32 @@ if [ "$WITH_AGY" = 1 ]; then
 
   step "antigravity-oauth plugin"
   # This upstream revision preserves the exact model IDs returned by agy models.
-  in_root "hermes plugins install antigravity-oauth --ref d9cec185c249d22578237821f9df8f7a3618d0e8 --enable --yes-deps </dev/null"
+  in_root "hermes plugins install antigravity-oauth --ref e4d0752d873ad4192b4630b0b0585b8c98ccc503 --enable --yes-deps </dev/null"
   in_root "/opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap; from providers import get_provider_profile; assert get_provider_profile(\"antigravity-oauth\") is not None'"
   endstep
 fi
+
+step "Bridge MCP (@markmayandi/bridge 1.1.1)"
+BRIDGE_VERSION=""
+node_bin=$(in_root "ls -d /opt/hermes/tools/node-*/bin/node 2>/dev/null | head -n1" || true)
+[ -n "$node_bin" ] || fail "no pm-managed node for Bridge"
+node_version=$(in_root "$node_bin --version" || true)
+node_major=$(printf '%s' "$node_version" | sed 's/^v//; s/\..*//')
+[ "$node_major" -ge 18 ] 2>/dev/null || fail "pm-managed node is too old for Bridge: $node_version"
+npm_bin=$(in_root "ls -d /opt/hermes/tools/npm-*/bin/npm 2>/dev/null | head -n1" || true)
+[ -n "$npm_bin" ] || fail "no pm-managed npm for Bridge"
+node_dir=$(dirname "$node_bin"); npm_dir=$(dirname "$npm_bin")
+in_root "export PATH=\"$node_dir:$npm_dir:\$PATH\"; npm install --prefix /opt/hermes-local/bridge --no-save --no-audit --no-fund --ignore-scripts @markmayandi/bridge@1.1.1 2>&1 | tail -n 3"
+BRIDGE_VERSION=$(in_root "$node_bin -p \"require('/opt/hermes-local/bridge/node_modules/@markmayandi/bridge/package.json').version\"")
+[ "$BRIDGE_VERSION" = "1.1.1" ] || fail "Bridge version is $BRIDGE_VERSION, expected 1.1.1"
+in_root "$node_bin --check /opt/hermes-local/bridge/node_modules/@markmayandi/bridge/bridge.js && $node_bin --check /opt/hermes-local/bridge/node_modules/@markmayandi/bridge/secure-folder-mcp/server.js"
+bridge_pkg=/opt/hermes-local/bridge/node_modules/@markmayandi/bridge
+case "$ARCH" in arm64) cf_arch=arm64 ;; *) cf_arch=amd64 ;; esac
+fetch -o "$ROOTFS$bridge_pkg/cloudflared" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$cf_arch"
+chmod 0755 "$ROOTFS$bridge_pkg/cloudflared"
+in_root "timeout 10 $bridge_pkg/cloudflared --version"
+echo "bridge $BRIDGE_VERSION, node $node_version, cloudflared pre-installed"
+endstep
 
 step "Voice: Edge TTS, cloud speech-to-text, live voice bridge (no local Whisper)"
 # v1.0.0-test3 shipped faster-whisper + Whisper small (~1 GB installed) for /api/audio/transcribe. Syed never
@@ -428,6 +450,7 @@ hermes_ref=$HERMES_REF
 hermes_commit=${HERMES_COMMIT:-}
 hermes_version=$hermes_version
 agy=$agy_version
+bridge=$BRIDGE_VERSION
 live=$(tr '\n' ' ' <"$WORK_DIR/live-versions.txt" 2>/dev/null)
 stt=cloud (hermes_local_stt.py: OpenAI or Gemini key)
 ubuntu_base=$base_version

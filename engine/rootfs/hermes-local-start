@@ -87,6 +87,11 @@ if [ -x /usr/sbin/sshd ]; then
   fi
 fi
 
+if [ -x /opt/hermes-local/bin/hermes-local-bridge ]; then
+  /opt/hermes-local/bin/hermes-local-bridge > >(sed -u 's/^/[bridge] /') 2>&1 &
+  pids+=($!)
+fi
+
 # Hermes v0.23.0's server dashboard relies on its own gateway: the gateway owns the session store
 # (without it /api/sessions and /api/analytics answer 503 "Session store is not initialized") and runs
 # the cron scheduler. It runs with no messaging platforms too; the API server only when enabled.
