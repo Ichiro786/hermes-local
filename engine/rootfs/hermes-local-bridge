@@ -1,0 +1,45 @@
+#!/bin/bash
+set -u
+export HOME=/root HERMES_HOME=/root/.hermes HERMES_RUNTIME_DIR=/opt/hermes/tools
+export PATH=/opt/hermes-local/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export LANG=${LANG:-C.UTF-8} TMPDIR=/tmp
+STATE=/root/.hermes-local
+[ -f "$STATE/settings.env" ] && . "$STATE/settings.env"
+WORKSPACE=${HL_BRIDGE_WORKSPACE:-/root/bridge-workspace}
+MODE=${HL_BRIDGE_MODE:-review}
+case "$MODE" in turbo|review|default|auto) ;; *) MODE=review ;; esac
+NODE_BIN=${BRIDGE_NODE_BIN:-}
+if [ -z "$NODE_BIN" ]; then
+  for d in /opt/hermes/tools/node-*/bin/node; do
+    [ -x "$d" ] && NODE_BIN="$d" && break
+  done
+fi
+BRIDGE_JS=${BRIDGE_JS:-/opt/hermes-local/bridge/node_modules/@markmayandi/bridge/bridge.js}
+if [ -z "$NODE_BIN" ]; then echo "no pm-managed node found; Bridge not started"; exit 1; fi
+if [ ! -f "$BRIDGE_JS" ]; then echo "Bridge is not installed; Bridge not started"; exit 1; fi
+mkdir -p "$WORKSPACE" "$STATE" || { echo "cannot create workspace $WORKSPACE"; exit 1; }
+LOG="$STATE/bridge.log"
+CONFIG=/root/.bridge/config.json
+"$NODE_BIN" "$BRIDGE_JS" "$WORKSPACE" --mode="$MODE" --fast </dev/null >"$LOG" 2>&1 &
+bridge_pid=$!
+(
+  for _ in $(seq 1 60); do
+    kill -0 "$bridge_pid" 2>/dev/null || exit 0
+    url=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$LOG" 2>/dev/null | grep -v 'api\.trycloudflare\.com' | head -n 1)
+    if [ -n "$url" ]; then
+      token=$(python3 -c "import json; print(json.load(open('$CONFIG'))['authToken'])" 2>/dev/null || true)
+      if [ -n "$token" ]; then full="$url/mcp?token=$token"; else full="$url/mcp"; fi
+      (umask 077; printf '%s\n' "$full" >"$STATE/bridge-url")
+      echo "MCP URL: $full"
+      exit 0
+    fi
+    sleep 2
+  done
+  kill -0 "$bridge_pid" 2>/dev/null && echo "no tunnel URL seen; local MCP is up, see $LOG"
+) &
+watcher_pid=$!
+trap 'kill -TERM "$bridge_pid" 2>/dev/null; kill "$watcher_pid" 2>/dev/null' TERM INT
+wait "$bridge_pid"
+status=$?
+kill "$watcher_pid" 2>/dev/null || true
+exit "$status"
