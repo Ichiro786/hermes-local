@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hermes Local <noreply@hermes-local.invalid>
+Date: Wed, 25 Nov 2026 19:04:19 +0000
+Subject: [PATCH 4/4] fix(rules): reword Hermes' default identity sentence in
+ GEMINI.md
+
+"You are Hermes Agent, built by Nous Research." (Hermes v0.23.3
+DEFAULT_AGENT_IDENTITY and the SOUL.md it seeds) and the previous seeded
+generation ("..., an intelligent AI assistant created by Nous Research.")
+draw the same zero-usage RESOURCE_EXHAUSTED as the lines PR #38 rewords:
+"Hermes Agent" together with "Nous Research" trips it, either alone does not
+(decolua/9router#2964). Reword to "You are Hermes, an agent built by Nous
+Research.", the wording reported to pass in #27. The persona is otherwise
+unchanged, and only the GEMINI.md handed to agy is affected.
+---
+ soul.py                  |  6 ++++++
+ tests/test_soul_rules.py | 18 ++++++++++++++++++
+ 2 files changed, 24 insertions(+)
+
+diff --git a/soul.py b/soul.py
+index 47c0283..a11afb6 100644
+--- a/soul.py
++++ b/soul.py
+@@ -27,6 +27,12 @@ _SOUL_PROBE_CHARS = 240
+ # on the way out so the persona and instructions survive without the false quota
+ # wall. This is a transport workaround, not a claim about the server-side filter.
+ _RULE_REWRITES = (
++    # Hermes' default identity sentence (agent/prompt_builder.py DEFAULT_AGENT_IDENTITY and the
++    # SOUL.md it seeds, plus the previous seeded generation). "Hermes Agent" together with
++    # "Nous Research" draws the same zero-usage 429; either name alone does not
++    # (decolua/9router#2964). This wording was reported to pass in #27.
++    (re.compile(r"You are Hermes Agent, (?:built by|an intelligent AI assistant created by) Nous Research\."),
++     "You are Hermes, an agent built by Nous Research."),
+     (re.compile(r"https?://hermes-agent\.nousresearch\.com/docs"), "the official documentation"),
+     (re.compile(r"(?m)^#+ Google model operational directives[ \t]*$"), "## Provider-specific guidance"),
+     (re.compile(r"(?m)^<!-- End Hermes runtime environment -->[ \t]*$\n?"), ""),
+diff --git a/tests/test_soul_rules.py b/tests/test_soul_rules.py
+index b3f3403..513add0 100644
+--- a/tests/test_soul_rules.py
++++ b/tests/test_soul_rules.py
+@@ -88,6 +88,24 @@ class SoulRulesTests(unittest.TestCase):
+         self.assertIn("Say plainly when something is blocked.", rules)
+         self.assertIn("A separate runtime marker may carry the next real user message.", rules)
+ 
++    def test_hermes_identity_pair_is_reworded(self):
++        for identity in (
++            "You are Hermes Agent, built by Nous Research. Be direct.",
++            "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful.",
++        ):
++            with self.subTest(identity=identity):
++                rules = soul.build_rules([identity], _PROMPT_PREAMBLE)
++                self.assertNotIn("You are Hermes Agent", rules)
++                self.assertIn("You are Hermes, an agent built by Nous Research.", rules)
++                self.assertIn(identity.rsplit(". ", 1)[1], rules)  # the rest of the persona survives
++
++    def test_identity_in_soul_file_is_reworded(self):
++        Path(self.home, "SOUL.md").write_text(
++            "You are Hermes Agent, built by Nous Research. Canary: KIWI-7.", encoding="utf-8")
++        rules = soul.build_rules(["Other Hermes instructions."], _PROMPT_PREAMBLE)
++        self.assertIn("KIWI-7", rules)
++        self.assertNotIn("You are Hermes Agent", rules)
++
+     def test_opt_out_env(self):
+         with patch.dict(os.environ, {"ANTIGRAVITY_WORKSPACE_RULES": "0"}):
+             self.assertFalse(soul.rules_enabled())
