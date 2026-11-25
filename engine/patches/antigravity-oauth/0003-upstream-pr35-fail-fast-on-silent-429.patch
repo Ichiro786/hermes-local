@@ -1,0 +1,249 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: maxuellstalin <maxuellstalin@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 19:01:47 +0000
+Subject: [PATCH 3/4] fix(stream): fail fast on a silent 429 (log poll from
+ upstream PR #35)
+
+Carries only the log-poll half of neerazz/hermes-antigravity-oauth#35
+(commit ae081e2): the stream's idle path tails the isolated agy log once a
+second and raises the RESOURCE_EXHAUSTED error as soon as agy logs its first
+retry, instead of waiting out agy's ~140 s of silent internal retries.
+
+Left out on purpose: the `--print-timeout 240s` argv default and the
+print_timeout result mapping. agy 1.5.15 documents the flag only as a "time
+limit for print mode"; whether it bounds one turn or the whole resident
+stream-json worker is not documented, and a session-wide limit would kill the
+worker after 240 s. The mapping's message is also Portuguese UI text.
+---
+ stream.py                        |  33 +++++++
+ tests/test_watchdog_fail_fast.py | 149 +++++++++++++++++++++++++++++++
+ 2 files changed, 182 insertions(+)
+ create mode 100644 tests/test_watchdog_fail_fast.py
+
+diff --git a/stream.py b/stream.py
+index 86a00ef..2867429 100644
+--- a/stream.py
++++ b/stream.py
+@@ -25,6 +25,11 @@ except ImportError:
+ 
+ logger = logging.getLogger(__name__)
+ 
++# How often the idle path tails the isolated agy log for a silent 429. agy
++# writes its retry lines to that log only; without this check the turn hangs
++# for the full client timeout.
++_QUOTA_CHECK_INTERVAL_SECONDS = 1.0
++
+ # agy reports a reply cut off at the model's output cap as a result "error".
+ # That is an output truncation, not a failed request: surfacing it as a
+ # RuntimeError made Hermes read "token limit" as a context overflow and print
+@@ -622,6 +627,7 @@ class AntigravityStream(Iterator[Any]):
+         start_time = time.monotonic()
+ 
+         gemini_dir = getattr(self.client, "_isolated_gemini_dir", None)
++        next_quota_check = start_time + _QUOTA_CHECK_INTERVAL_SECONDS
+         watchdog_stop = threading.Event()
+         watchdog_thread: threading.Thread | None = None
+ 
+@@ -665,6 +671,26 @@ class AntigravityStream(Iterator[Any]):
+                 if line is None:
+                     # Idle poll slice: no stdout yet, loop to service the
+                     # thinking reader and early-error checks.
++                    #
++                    # The early-429 check runs HERE, inline, and not only in the
++                    # agy-quota-watchdog thread: that thread stops on the first
++                    # parsed event (``init``, emitted ~2s in, before any model
++                    # request), because its closure keeps an abandoned stream from
++                    # being GC-collectable. A silent 429 appears only in agy's own
++                    # log (never on stdout) several seconds later, so this is the
++                    # only place that sees it. Cost: one 16 KB tail read per
++                    # second, on the thread already blocked on stdout.
++                    if gemini_dir and time.monotonic() >= next_quota_check:
++                        next_quota_check = time.monotonic() + _QUOTA_CHECK_INTERVAL_SECONDS
++                        quota_err = _check_early_quota_error(gemini_dir, min_mtime=start_time)
++                        if quota_err:
++                            self._early_error = quota_err
++                            logger.warning(
++                                "Antigravity process hit early quota limit: %s; terminating to prevent hang.",
++                                quota_err,
++                            )
++                            self.client._terminate_process(self.proc)
++                            raise RuntimeError(f"Antigravity model error: {quota_err}")
+                     continue
+                 if not line:
+                     # `_read_line` returns an empty string exclusively on EOF of the
+@@ -681,6 +707,12 @@ class AntigravityStream(Iterator[Any]):
+                 except Exception:
+                     continue
+ 
++                # Stopping here is deliberate and load-bearing: the watchdog's
++                # loop closure references this stream, so an abandoned stream is
++                # only cyclic-GC-collectable once the thread exits (see the
++                # ''agy-quota-watchdog'' invariant in tests/test_client_lifecycle.py).
++                # Detection of a silent 429 therefore happens inline in the idle
++                # path below, not in this thread.
+                 watchdog_stop.set()
+ 
+                 event_type = event.get("event")
+@@ -785,6 +817,7 @@ class AntigravityStream(Iterator[Any]):
+                                             text_buffer = ""
+ 
+                 elif event_type == "result":
++                    watchdog_stop.set()
+                     res = event.get("result", {})
+                     if not self.conversation_id:
+                         self.conversation_id = res.get("conversation_id", "")
+diff --git a/tests/test_watchdog_fail_fast.py b/tests/test_watchdog_fail_fast.py
+new file mode 100644
+index 0000000..a4eec7a
+--- /dev/null
++++ b/tests/test_watchdog_fail_fast.py
+@@ -0,0 +1,149 @@
++"""Regression test for fail-fast on a silent 429.
++
++agy emits ``init`` roughly two seconds after spawn, *before* any model
++request. When the backend answers ``RESOURCE_EXHAUSTED (429)``, agy retries
++internally (8 attempts, ~140 s of exponential backoff) and writes the retry
++lines **only to its own log file**, never to stdout. The ``agy-quota-watchdog``
++thread deliberately stops on the first parsed JSON event — which is ``init``
++— because its closure keeps an abandoned stream from being GC-collectable
++(pinned by ``tests/test_client_lifecycle.py``). So the only place that could
++see the 429 was the stream's idle path, and it did not look. The turn ran to
++the client timeout and Hermes reported the useless
++``Antigravity execution failed: no result event, process still alive``
++instead of the real cause.
++
++Run standalone (``python tests/test_watchdog_fail_fast.py``) or with the
++per-file loop documented in CONTRIBUTING.md.
++"""
++
++import io
++import json
++import subprocess
++import sys
++import threading
++import time
++import unittest
++from pathlib import Path
++
++plugin_dir = Path(__file__).resolve().parent.parent
++if str(plugin_dir) not in sys.path:
++    sys.path.insert(0, str(plugin_dir))
++
++import stream as stream_module
++from stream import AntigravityStream
++
++# The literal text agy writes to its isolated log when the backend 429s.
++QUOTA_LINE = "Run: attempt 1 failed (RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).), retrying in 4s"
++
++
++class _ScriptedStdout:
++    """Yields fixed lines, then blocks for ``block_seconds`` before EOF.
++
++    Blocking (instead of returning EOF at once) is what keeps
++    ``_stream_generator`` inside its read loop long enough for the watchdog to
++    poll — the exact window the old code skipped.
++    """
++
++    def __init__(self, lines, block_seconds=0.0):
++        self._lines = list(lines)
++        self._deadline = None
++        self._block_seconds = block_seconds
++
++    def readline(self):
++        if self._lines:
++            return self._lines.pop(0)
++        if self._deadline is None:
++            self._deadline = time.monotonic() + self._block_seconds
++        # Block WITHOUT returning, exactly like agy when it is silent: stdout
++        # stays open with no line, so the stream sees idle poll slices
++        # (``_read_line`` -> None) and its inline 429 check runs.
++        while time.monotonic() < self._deadline:
++            time.sleep(0.05)
++        return ""
++
++
++class _FakeProc:
++    def __init__(self, lines, block_seconds=0.0):
++        self.stdout = _ScriptedStdout(lines, block_seconds)
++        self.stderr = io.StringIO("")
++        self.pid = 4242
++
++    def poll(self):
++        return None
++
++    def wait(self, timeout=None):
++        raise subprocess.TimeoutExpired("agy", timeout)
++
++    def terminate(self):
++        pass
++
++    def kill(self):
++        pass
++
++
++class _FakeClient:
++    _isolated_gemini_dir = "/tmp/hermes-agy-test"
++    _worker_proc = None
++
++    def __init__(self):
++        self._lock = threading.RLock()
++        self._active_processes = set()
++
++    def _terminate_process(self, proc):
++        pass
++
++    def _terminate_worker(self):
++        pass
++
++
++def _init_line():
++    return json.dumps({"event": "init", "init": {"model": "gemini-test"}}) + "\n"
++
++
++def _result_line(**result):
++    return json.dumps({"event": "result", "result": result}) + "\n"
++
++
++class SilentQuotaFailFastTests(unittest.TestCase):
++    """A silent 429 must surface as a quota error, not as a bare timeout."""
++
++    def setUp(self):
++        self._original = stream_module._check_early_quota_error
++        self.calls = 0
++
++    def tearDown(self):
++        stream_module._check_early_quota_error = self._original
++
++    def _fake_check(self, gemini_dir, min_mtime=None):
++        self.calls += 1
++        return QUOTA_LINE if self.calls >= 3 else None
++
++    def test_silent_429_surfaces_as_quota_error_after_init(self):
++        stream_module._check_early_quota_error = self._fake_check
++        proc = _FakeProc([_init_line()], block_seconds=3.0)
++        stream = AntigravityStream(
++            proc=proc, client=_FakeClient(), model="gemini-test", timeout=15, is_worker=False
++        )
++
++        started = time.monotonic()
++        with self.assertRaises(RuntimeError) as ctx:
++            for _ in stream:
++                pass
++
++        message = str(ctx.exception)
++        self.assertIn("RESOURCE_EXHAUSTED", message)
++        self.assertNotIn("no result event", message)
++        self.assertGreaterEqual(
++            self.calls,
++            2,
++            "the stream never re-checked the agy log after init — the 429 would be missed",
++        )
++        self.assertLess(
++            time.monotonic() - started,
++            15,
++            "watchdog did not fail fast; the turn ran to its timeout",
++        )
++
++
++if __name__ == "__main__":
++    unittest.main()

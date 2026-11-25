@@ -104,6 +104,11 @@ if [ "$rc" = 0 ]; then
     if [ "$2" = 1 ]; then echo "CHECK ok   $1"; else echo "CHECK FAIL $1"; rc=1; fi; }
   note() { echo "CHECK note $1"; }
 
+  echo "== antigravity-oauth rewords the fake-429 trigger lines (offline, no agy run)"
+  run /bin/bash -c '/opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_agy_rules_check.py' >"$work/agy-rules.txt" 2>&1
+  cat "$work/agy-rules.txt"
+  check "antigravity-oauth GEMINI.md carries no known fake-429 trigger" "$(grep -q '^HL_AGY_RULES_OK' "$work/agy-rules.txt" && echo 1 || echo 0)"
+
   echo "== self-update never runs"
   run /bin/bash -c '/opt/hermes-local/bin/hermes-py -I /opt/hermes-local/diag-update.py'
   check "no source-update message in engine log" "$(grep -qiE 'source-update|update is still running' "$log" && echo 0 || echo 1)"

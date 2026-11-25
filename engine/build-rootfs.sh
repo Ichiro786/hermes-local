@@ -157,7 +157,16 @@ if [ "$WITH_AGY" = 1 ]; then
   step "antigravity-oauth plugin"
   # This upstream revision preserves the exact model IDs returned by agy models.
   in_root "hermes plugins install antigravity-oauth --ref e4d0752d873ad4192b4630b0b0585b8c98ccc503 --enable --yes-deps </dev/null"
+  # agy >= 1.5.10 answers some lines of Hermes' own prompt with a fake, zero-usage 429. Reword them in the
+  # GEMINI.md the plugin hands to agy, and fail fast on agy's silent 429 retries (engine/patches/antigravity-oauth).
+  agy_plugin="$ROOTFS/root/.hermes/plugins/antigravity-oauth"
+  [ -f "$agy_plugin/soul.py" ] || fail "antigravity-oauth not at $agy_plugin"
+  for p in "$SCRIPT_DIR"/patches/antigravity-oauth/*.patch; do
+    git -C "$agy_plugin" apply --check "$p" || fail "plugin patch does not apply: $(basename "$p")"
+    git -C "$agy_plugin" apply "$p"; echo "applied $(basename "$p")"
+  done
   in_root "/opt/hermes-local/bin/hermes-py -c 'import hermes_bootstrap; from providers import get_provider_profile; assert get_provider_profile(\"antigravity-oauth\") is not None'"
+  in_root "/bin/bash /opt/hermes-local/bin/hermes-py -I /opt/hermes-local/bin/hermes_local_agy_rules_check.py"
   endstep
 fi
 
